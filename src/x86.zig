@@ -3215,6 +3215,32 @@ pub const Compiler = struct {
         const r1 = self.getOrLoad(instr.rs1, SCRATCH);
         const divisor = self.getOrLoad(rs2, SCRATCH2);
 
+        // Check divisor == 0 → DivisionByZero (x86 IDIV/DIV raises SIGFPE)
+        Enc.testRegReg32(&self.code, self.alloc, divisor, divisor);
+        self.emitCondError(.e, 3); // error code 3 = DivisionByZero
+
+        // Signed division edge cases for divisor == -1:
+        // - div: INT_MIN / -1 → IntegerOverflow trap (x86 IDIV raises SIGFPE)
+        // - rem: N % -1 = 0 always; skip IDIV to avoid SIGFPE on INT_MIN
+        var rem_done_off: ?u32 = null;
+        if (signed) {
+            if (!is_rem) {
+                Enc.cmpImm8(&self.code, self.alloc, divisor, -1);
+                const skip_off = Enc.jccRel32(&self.code, self.alloc, .ne);
+                Enc.cmpImm32(&self.code, self.alloc, r1, 0x80000000);
+                self.emitCondError(.e, 4); // error code 4 = IntegerOverflow
+                Enc.patchRel32(self.code.items, skip_off, self.currentOffset());
+            } else {
+                // rem_s: if divisor == -1, result is 0 — skip IDIV entirely
+                Enc.cmpImm8(&self.code, self.alloc, divisor, -1);
+                const ne_off = Enc.jccRel32(&self.code, self.alloc, .ne);
+                Enc.xorRegReg32(&self.code, self.alloc, .rax, .rax);
+                self.storeVreg(instr.rd, .rax);
+                rem_done_off = Enc.jmpRel32(&self.code, self.alloc);
+                Enc.patchRel32(self.code.items, ne_off, self.currentOffset());
+            }
+        }
+
         // Save RDX if it holds a live vreg (vreg 6)
         const rdx_live = vregToPhys(6) != null and 6 < self.reg_count;
         if (rdx_live) Enc.push(&self.code, self.alloc, .rdx);
@@ -3247,12 +3273,42 @@ pub const Compiler = struct {
         self.storeVreg(instr.rd, result_reg);
 
         if (rdx_live) Enc.pop(&self.code, self.alloc, .rdx);
+
+        // Patch rem_s shortcut jump to skip past IDIV
+        if (rem_done_off) |off| Enc.patchRel32(self.code.items, off, self.currentOffset());
     }
 
     fn emitDiv64(self: *Compiler, instr: RegInstr, signed: bool, is_rem: bool) void {
         const rs2 = instr.rs2();
         const r1 = self.getOrLoad(instr.rs1, SCRATCH);
         const divisor = self.getOrLoad(rs2, SCRATCH2);
+
+        // Check divisor == 0 → DivisionByZero
+        Enc.testRegReg(&self.code, self.alloc, divisor, divisor);
+        self.emitCondError(.e, 3); // error code 3 = DivisionByZero
+
+        // Signed division edge cases for divisor == -1:
+        // - div: INT64_MIN / -1 → IntegerOverflow trap
+        // - rem: N % -1 = 0 always; skip IDIV to avoid SIGFPE on INT64_MIN
+        var rem_done_off: ?u32 = null;
+        if (signed) {
+            if (!is_rem) {
+                Enc.cmpImm8(&self.code, self.alloc, divisor, -1);
+                const skip_off = Enc.jccRel32(&self.code, self.alloc, .ne);
+                Enc.movImm64(&self.code, self.alloc, SCRATCH, 0x8000000000000000);
+                Enc.cmpRegReg(&self.code, self.alloc, r1, SCRATCH);
+                self.emitCondError(.e, 4); // error code 4 = IntegerOverflow
+                Enc.patchRel32(self.code.items, skip_off, self.currentOffset());
+            } else {
+                // rem_s: if divisor == -1, result is 0 — skip IDIV entirely
+                Enc.cmpImm8(&self.code, self.alloc, divisor, -1);
+                const ne_off = Enc.jccRel32(&self.code, self.alloc, .ne);
+                Enc.xorRegReg(&self.code, self.alloc, .rax, .rax);
+                self.storeVreg(instr.rd, .rax);
+                rem_done_off = Enc.jmpRel32(&self.code, self.alloc);
+                Enc.patchRel32(self.code.items, ne_off, self.currentOffset());
+            }
+        }
 
         const rdx_live = vregToPhys(6) != null and 6 < self.reg_count;
         if (rdx_live) Enc.push(&self.code, self.alloc, .rdx);
@@ -3281,6 +3337,9 @@ pub const Compiler = struct {
         self.storeVreg(instr.rd, result_reg);
 
         if (rdx_live) Enc.pop(&self.code, self.alloc, .rdx);
+
+        // Patch rem_s shortcut jump to skip past IDIV
+        if (rem_done_off) |off| Enc.patchRel32(self.code.items, off, self.currentOffset());
     }
 
     // --- Bit manipulation helpers ---
