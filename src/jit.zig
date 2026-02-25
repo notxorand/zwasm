@@ -1010,19 +1010,23 @@ pub const Compiler = struct {
 
     /// Get the physical register for a vreg, or load to scratch.
     fn getOrLoad(self: *Compiler, vreg: u16, scratch: u5) u5 {
-        if (vregToPhys(vreg)) |phys| return phys;
-        // Check FP D-register cache — if value is only in a D-reg, materialize to GPR
+        // Check FP D-register cache FIRST — if value is dirty in a D-reg,
+        // the GPR (physical or memory) is stale and must be materialized.
         if (self.fpCacheFind(vreg)) |slot| {
             if (self.fp_dreg_dirty[slot]) {
                 const dreg = fpSlotToDreg(slot);
-                self.emit(a64.fmovToGp64(scratch, dreg));
-                // Write back to memory for consistency
-                self.emit(a64.str64(scratch, REGS_PTR, @as(u16, vreg) * 8));
+                const target = vregToPhys(vreg) orelse scratch;
+                self.emit(a64.fmovToGp64(target, dreg));
                 self.fp_dreg_dirty[slot] = false;
-                if (scratch == SCRATCH) self.scratch_vreg = vreg;
-                return scratch;
+                // Also write back to memory if vreg is spilled (no phys reg)
+                if (vregToPhys(vreg) == null) {
+                    self.emit(a64.str64(scratch, REGS_PTR, @as(u16, vreg) * 8));
+                    if (scratch == SCRATCH) self.scratch_vreg = vreg;
+                }
+                return target;
             }
         }
+        if (vregToPhys(vreg)) |phys| return phys;
         // Check scratch register cache — skip redundant load if value already in SCRATCH
         if (scratch == SCRATCH) {
             if (self.scratch_vreg) |cached| {
