@@ -44,6 +44,42 @@
           ln -s ${zigSrc}/lib $out/lib
         '';
 
+        # wasi-sdk 30 binary (for C/C++ → wasm32-wasi compilation)
+        wasiSdkArchInfo = {
+          "aarch64-darwin" = {
+            url = "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-30/wasi-sdk-30.0-arm64-macos.tar.gz";
+            sha256 = "0f2zqwxzdf6fjzjjcycvrk1mjg2w29lk19lpjc7sddnxwgdrzf5l";
+          };
+          "x86_64-linux" = {
+            url = "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-30/wasi-sdk-30.0-x86_64-linux.tar.gz";
+            sha256 = "145cf587396n01zgf43hzdpdmivh3sr4fx9sfs8g5p0fw45clys1";
+          };
+          "x86_64-darwin" = {
+            url = "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-30/wasi-sdk-30.0-x86_64-macos.tar.gz";
+            sha256 = ""; # untested
+          };
+          "aarch64-linux" = {
+            url = "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-30/wasi-sdk-30.0-arm64-linux.tar.gz";
+            sha256 = ""; # untested
+          };
+        }.${system} or null;
+
+        wasiSdkSrc = if wasiSdkArchInfo != null then
+          builtins.fetchTarball {
+            url = wasiSdkArchInfo.url;
+            sha256 = wasiSdkArchInfo.sha256;
+          }
+        else null;
+
+        wasiSdkBin = if wasiSdkSrc != null then
+          pkgs.runCommand "wasi-sdk-30-wrapper" {} ''
+            mkdir -p $out/bin $out/share
+            ln -s ${wasiSdkSrc}/bin/* $out/bin/
+            ln -s ${wasiSdkSrc}/share/wasi-sysroot $out/share/wasi-sysroot
+            ln -s ${wasiSdkSrc}/lib $out/lib
+          ''
+        else null;
+
       in {
         devShells.default = pkgs.mkShell {
           name = "zwasm";
@@ -70,13 +106,22 @@
             tinygo
             wasm-tools  # json-from-wast (spec test conversion), component inspection
 
+            # Real-world wasm compilation toolchains
+            go          # GOOS=wasip1 GOARCH=wasm (Go 1.21+)
+            # Rust: use system rustup (rustup target add wasm32-wasip1)
+            # wasi-sdk: provided via custom fetch below
+
             # Utilities
             gnused
             coreutils
             python3
-          ];
+          ] ++ pkgs.lib.optionals (wasiSdkBin != null) [ wasiSdkBin ];
 
-          shellHook = '''';  # silent — avoid noise in SSH/direnv
+          shellHook = ''
+            ${if wasiSdkSrc != null then ''
+              export WASI_SDK_PATH="${wasiSdkSrc}"
+            '' else ""}
+          '';
         };
       }
     );

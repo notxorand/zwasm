@@ -40,11 +40,13 @@ See `private/roadmap-production.md` Phase 46 for full detail.
 
 ## Current Task
 
-47: WAT roundtrip 100% — complete. 3 bugs fixed, 62,156/62,156 passed.
+Reliability improvement (branch: `strictly-check/reliability`).
+Plan: `.dev/reliability-plan.md`. Progress: `.dev/reliability-handover.md`.
+Phase A (env setup) done. Proceeding to Phase B (real-world wasm compilation).
 
 ## Previous Task
 
-Stage 46 merged to main. SIMD parity plan written to simd-analysis.md.
+47: WAT roundtrip 100% — complete. 3 bugs fixed, 62,156/62,156 passed.
 
 ## Wasm 3.0 Coverage
 
@@ -62,6 +64,7 @@ Mac 62,158/62,158 (100%), Ubuntu 62,158/62,158 (100%). Zero spec failures.
 
 .dev/ docs: roadmap.md, decisions.md, checklist.md, spec-support.md,
 bench-strategy.md, profile-analysis.md, jit-debugging.md, references/wasm-spec.md
+**Reliability**: .dev/reliability-plan.md (plan), .dev/reliability-handover.md (progress)
 **Production roadmap**: private/roadmap-production.md (Stages 35+ detail)
 Proposals: .dev/status/proposals.yaml, .dev/references/proposals/, .dev/references/repo-catalog.yaml
 Ubuntu x86_64: .dev/ubuntu-x86_64.md (gitignored — SSH commands, tools, JIT debug)
