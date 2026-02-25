@@ -111,12 +111,19 @@ Stop **only** when:
 - User explicitly requests stop
 - Ambiguous requirements with multiple valid directions (rare)
 - **Current stage's Task Queue is empty AND next stage requires user input**
+- **Reliability work**: all phases in `.dev/reliability-handover.md` are `[x]`
 
 Do NOT stop for:
 
 - Task Queue becoming empty (plan next task and continue)
 - Session context getting large (compress and continue)
 - "Good stopping points" — there are none until the current stage is done
+- **Merging to main** — merge is a checkpoint, not a stopping point.
+  After merge + push + new branch, immediately continue the next task.
+- **Branch boundaries** — creating a new `-NNN` branch is part of the flow, not a pause.
+- **User not responding** — the user may not be monitoring. Proceed autonomously.
+  If truly blocked (e.g., SSH unreachable, ambiguous architectural choice), document
+  the blocker in `.dev/reliability-handover.md` and move to the next unblocked task.
 
 When in doubt, **continue** — pick the most reasonable option and proceed.
 
@@ -170,14 +177,14 @@ Merge at each regression-free improvement boundary, not at stage end.
 
 - Branches: `strictly-check/reliability-001`, `-002`, `-003`, ...
 - Each branch targets a **regression-free improvement unit** (e.g., one bug fix, one test suite)
-- Workflow per branch:
+- Workflow per branch (continuous — do NOT pause between steps):
   1. Work on `strictly-check/reliability-NNN`
   2. When improvement is complete and passes Merge Gate:
      - Merge to main: `git checkout main && git merge strictly-check/reliability-NNN`
      - Push: `git push origin main`
   3. Create next branch: `git checkout -b strictly-check/reliability-NNN+1 main`
   4. Update `.dev/reliability-handover.md` with new branch name
-  5. Continue from handover
+  5. **Immediately** continue next task from handover — do NOT stop or summarize
 
 ### Stage Completion
 
