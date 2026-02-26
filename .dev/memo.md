@@ -19,14 +19,13 @@ Plan: `@./.dev/reliability-plan.md`. Progress: `@./.dev/reliability-handover.md`
 **Plan A: Incremental regression fix + feature implementation**
 - [x] P1: rw_c_string hang fix — skip back-edge JIT for reentry guard (20.2ms)
 - [x] P2: nbody FP cache fix — expand D-reg cache D2-D15, FP-aware MOV (23.1ms, 0.97x wasmtime)
-- P3: rw_c_math re-measure (Priority C) — 58ms, 4.92x wasmtime
+- [x] P3: rw_c_math — accepted as regalloc limit (58ms, 4.92x, 136 regs)
 - P4: GC JIT basic implementation (Priority B)
 - P5: st_matrix accept as exception (Priority C)
 
-**Active: P3 (rw_c_math re-measure)**
-rw_c_math was consistently 55-67ms across history (the 16.4ms in old handover was
-anomalous). Current: 58.0ms vs wasmtime 11.8ms = 4.92x. Need to investigate
-what operations are hot in c_math_compute.wasm and if FP cache helps.
+**Active: P4 (GC JIT basic implementation)**
+JIT-compile struct.new, struct.get, struct.set, array.new, array.get, array.set.
+Target: gc_alloc ≤1.5x, gc_tree ≤2x wasmtime.
 
 ## Previous Task
 

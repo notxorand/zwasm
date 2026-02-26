@@ -2174,3 +2174,38 @@ entries:
       rw_c_string: {time_ms: 20.9}
       rw_cpp_string: {time_ms: 6.8}
       rw_cpp_sort: {time_ms: 2.6}
+  - id: "P3"
+    date: "2026-02-26"
+    reason: "Re-measure rw_c_math: accept as regalloc limit (136 regs, 4.92x)"
+    commit: "515c383"
+    build: ReleaseSafe
+    results:
+      fib: {time_ms: 45.4}
+      tak: {time_ms: 7.4}
+      sieve: {time_ms: 3.9}
+      nbody: {time_ms: 21.4}
+      nqueens: {time_ms: 3.5}
+      tgo_fib: {time_ms: 32.6}
+      tgo_tak: {time_ms: 5.7}
+      tgo_arith: {time_ms: 2.1}
+      tgo_sieve: {time_ms: 2.5}
+      tgo_fib_loop: {time_ms: 1.4}
+      tgo_gcd: {time_ms: 2.7}
+      tgo_nqueens: {time_ms: 40.4}
+      tgo_mfr: {time_ms: 46.6}
+      tgo_list: {time_ms: 35.0}
+      tgo_rwork: {time_ms: 6.0}
+      tgo_strops: {time_ms: 30.1}
+      st_fib2: {time_ms: 883.0}
+      st_sieve: {time_ms: 179.5}
+      st_nestedloop: {time_ms: 2.6}
+      st_ackermann: {time_ms: 4.5}
+      st_matrix: {time_ms: 283.0}
+      gc_alloc: {time_ms: 17.9}
+      gc_tree: {time_ms: 133.9}
+      rw_rust_fib: {time_ms: 34.1}
+      rw_c_matrix: {time_ms: 17.3}
+      rw_c_math: {time_ms: 52.4}
+      rw_c_string: {time_ms: 18.9}
+      rw_cpp_string: {time_ms: 6.9}
+      rw_cpp_sort: {time_ms: 3.2}

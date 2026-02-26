@@ -52,14 +52,18 @@ Verification:
 - nbody ≤ 15ms, spec pass, no regression on other benchmarks
 - **Record**: `bash bench/record.sh --id=P2 --reason="Fix nbody FP cache regression"`
 
-### Phase 3: rw_c_math re-measure (Priority C)
+### Phase 3: rw_c_math re-measure (Priority C) — ACCEPTED AS EXCEPTION
 
-**Symptom**: 16.4ms (1.86x wasmtime 8.8ms). FP heavy.
-**Approach**: Phase 2 nbody FP fix may improve this as well. Re-measure first.
-  If still insufficient, investigate additional FP cache optimization.
+**Symptom**: 58ms (4.92x wasmtime 11.8ms). Previous 16.4ms was anomalous measurement.
+**Root cause**: c_math_compute has a single hot function (func#5) with 1381 IR instrs,
+  136 vregs, 36 locals. Single-pass regalloc produces 876 STRs + 426 LDRs + 265 FMOVs
+  out of 3323 total ARM64 instructions (38% memory traffic). wasmtime uses graph-coloring
+  regalloc2 which handles 136 vregs efficiently.
+**Decision**: Accept as single-pass regalloc limitation (like st_matrix).
+  No further optimization feasible without multi-pass register allocator.
 
 Verification:
-- **Record**: `bash bench/record.sh --id=P3 --reason="Re-measure after FP cache fix"`
+- **Record**: `bash bench/record.sh --id=P3 --reason="Re-measure: accept as regalloc limit"`
 
 ### Phase 4: GC JIT basic implementation (Priority B — Feature)
 
