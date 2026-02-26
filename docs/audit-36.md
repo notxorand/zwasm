@@ -190,7 +190,7 @@ by the host function implementation.
 
 **ReleaseFast strips all of the above**. Not safe for untrusted modules.
 
-**Binary size**: 1.28MB (ReleaseSafe), well within 1.5MB guard.
+**Binary size**: 1.36MB (ReleaseSafe), well within 1.5MB guard.
 
 **Recommendation**: SECURITY.md and docs/security.md both recommend
 ReleaseSafe for production. Build scripts default to ReleaseSafe.
@@ -214,7 +214,7 @@ equivalent built-in safety mechanisms:
 - Use-after-free: partially detected via allocator tracking
 
 **Test results**:
-- `zig build test` (Debug mode): 425+ tests pass, 0 leaks
+- `zig build test` (Debug mode): 521 tests pass, 0 leaks
 - `python3 run_spec.py --build --summary` (ReleaseSafe): 62,158/62,158 pass
 - `test/fuzz/fuzz_campaign.sh --duration=10` (ReleaseSafe): 25,818 modules, 0 crashes
 

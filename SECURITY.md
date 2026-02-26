@@ -5,7 +5,7 @@
 | Version | Supported |
 |---------|-----------|
 | main branch | Yes |
-| Tagged releases (v0.x.x) | Yes |
+| Tagged releases (v1.x.x) | Yes |
 
 ## Reporting a Vulnerability
 
@@ -42,7 +42,7 @@ The following are in scope for security reports:
 
 The following are out of scope:
 
-- Denial of service via resource exhaustion (by design, no CPU/memory quotas)
+- Denial of service via resource exhaustion beyond configured limits (fuel and memory limits available)
 - Timing side channels
 - Issues only reproducible with ReleaseFast (use ReleaseSafe for production)
 - Bugs in host-provided import functions

@@ -130,9 +130,9 @@ A valid Wasm module, no matter how adversarial, cannot:
 1. **Timing side channels**: No constant-time guarantees. Wasm execution time is
    observable and may leak information about branch patterns or memory access.
 
-2. **Resource exhaustion beyond limits**: A module can allocate up to 4 GiB of
-   linear memory and consume CPU until externally terminated. zwasm does not
-   enforce CPU time limits or memory quotas beyond the Wasm spec.
+2. **Resource exhaustion beyond limits**: zwasm provides fuel-based CPU limits
+   (`--fuel`) and memory limits (`--max-memory`), but a module without these
+   limits can allocate up to 4 GiB and consume CPU until externally terminated.
 
 3. **Host function bugs**: If a host-provided import function has vulnerabilities,
    zwasm cannot prevent exploitation through that function.
@@ -141,9 +141,9 @@ A valid Wasm module, no matter how adversarial, cannot:
    Wasm's linear memory model provides some inherent isolation but is not
    designed to prevent microarchitectural attacks.
 
-5. **Denial of service**: A malicious module can enter infinite loops, allocate
-   maximum memory, or perform expensive computations. Embedders should apply
-   external timeout/resource limits for untrusted modules.
+5. **Denial of service**: Without fuel/memory limits, a malicious module can enter
+   infinite loops or allocate maximum memory. Use `--sandbox` or explicit
+   `--fuel`/`--max-memory` limits for untrusted modules.
 
 6. **Non-determinism**: Thread-related operations, relaxed SIMD, and floating-point
    NaN bit patterns may produce different results across platforms. This does not

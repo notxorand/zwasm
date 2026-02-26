@@ -13,11 +13,11 @@ A small, fast WebAssembly runtime written in Zig. Library and CLI.
 > testing and benchmark verification are ongoing. The API and behavior may
 > change between releases. Not yet recommended for production use.
 
-Most Wasm runtimes are either fast but large (wasmtime ~56MB) or small but slow (wasm3 ~0.3MB, interpreter only). zwasm targets the gap between them: **~1.3MB with ARM64 + x86_64 JIT compilation**.
+Most Wasm runtimes are either fast but large (wasmtime ~56MB) or small but slow (wasm3 ~0.3MB, interpreter only). zwasm targets the gap between them: **~1.4MB with ARM64 + x86_64 JIT compilation**.
 
 | Runtime  | Binary  | Memory | JIT            |
 |----------|--------:|-------:|----------------|
-| zwasm    | 1.3MB   | ~3.4MB | ARM64 + x86_64 |
+| zwasm    | 1.4MB   | ~3.5MB | ARM64 + x86_64 |
 | wasmtime | 56MB    | ~12MB  | Cranelift      |
 | wasm3    | 0.3MB   | ~1MB   | None           |
 
@@ -27,7 +27,7 @@ zwasm was extracted from [ClojureWasm](https://github.com/niclas-ahden/ClojureWa
 
 - **581+ opcodes**: Full MVP + SIMD (236 + 20 relaxed) + Exception handling + Function references + GC + Threads (79 atomics)
 - **4-tier execution**: bytecode > predecoded IR > register IR > ARM64/x86_64 JIT
-- **100% spec conformance**: 62,158/62,158 spec tests passing (Mac + Ubuntu)
+- **100% spec conformance**: 62,158/62,158 spec tests, 792/792 E2E tests (Mac + Ubuntu)
 - **All Wasm 3.0 proposals**: See [Spec Coverage](#wasm-spec-coverage) below
 - **Component Model**: WIT parser, Canonical ABI, component linking, WASI P2 adapter
 - **WAT support**: `zwasm file.wat`, build-time optional (`-Dwat=false`)
@@ -50,25 +50,25 @@ All ratified Wasm proposals through 3.0 are implemented.
 | Phase 4  | Threads (79 atomics)                                                             | Complete     |
 | Layer    | Component Model (WIT, Canon ABI, WASI P2)                                       | Complete     |
 
-18/18 proposals complete. 510 unit tests, 356/356 E2E tests.
+18/18 proposals complete. 521 unit tests, 792/792 E2E tests, 30 real-world compatibility tests.
 
 ## Performance
 
 Benchmarked on Apple M4 Pro against wasmtime 41.0.1 (Cranelift JIT).
-14 of 23 benchmarks match or beat wasmtime. 21/23 within 2x.
-Memory usage 3-4x lower than wasmtime, 8-12x lower than Bun/Node.
+16 of 29 benchmarks match or beat wasmtime. 25/29 within 1.5x.
+Memory usage 3-4x lower than wasmtime, 8-10x lower than Bun/Node.
 
 | Benchmark       | zwasm  | wasmtime | Bun    | Node   |
 |-----------------|-------:|---------:|-------:|-------:|
-| nqueens(8)      | 2ms    | 5ms      | 14ms   | 22ms   |
-| nbody(1M)       | 11ms   | 21ms     | 32ms   | 36ms   |
-| gcd(12K,67K)    | 2ms    | 4ms      | 15ms   | 22ms   |
-| sieve(1M)       | 4ms    | 7ms      | 16ms   | 26ms   |
-| tak(24,16,8)    | 7ms    | 10ms     | 17ms   | 25ms   |
-| fib(35)         | 51ms   | 49ms     | 31ms   | 46ms   |
-| st_fib2         | 1014ms | 656ms    | 345ms  | 375ms  |
+| nqueens(8)      | 2ms    | 5ms      | 14ms   | 23ms   |
+| nbody(1M)       | 22ms   | 22ms     | 32ms   | 36ms   |
+| gcd(12K,67K)    | 2ms    | 5ms      | 14ms   | 23ms   |
+| sieve(1M)       | 5ms    | 7ms      | 17ms   | 29ms   |
+| tak(24,16,8)    | 5ms    | 9ms      | 17ms   | 29ms   |
+| fib(35)         | 46ms   | 51ms     | 36ms   | 52ms   |
+| st_fib2         | 900ms  | 674ms    | 353ms  | 389ms  |
 
-Full results (23 benchmarks): `bench/runtime_comparison.yaml`
+Full results (29 benchmarks): `bench/runtime_comparison.yaml`
 
 > **Note**: SIMD benchmarks are not included above. SIMD operations currently run on the
 > stack interpreter (no JIT), resulting in ~22x slower than wasmtime for SIMD-heavy workloads.
@@ -154,7 +154,7 @@ Requires Zig 0.15.2.
 
 ```bash
 zig build              # Build (Debug)
-zig build test         # Run all tests (510 tests)
+zig build test         # Run all tests (521 tests)
 ./zig-out/bin/zwasm run file.wasm
 ```
 
@@ -220,6 +220,7 @@ The spec test suite runs on every change.
 - [x] Stages 35-41: Production hardening (crash safety, CI/CD, docs, API stability, distribution)
 - [x] Stages 42-43: Community preparation, v1.0.0 release
 - [x] Stages 44-47: WAT parser spec parity, SIMD perf analysis, book i18n, WAT roundtrip 100%
+- [x] Reliability: Cross-platform verification (30 real-world programs), JIT correctness (OSR, back-edge safety)
 - [ ] Future: SIMD JIT (NEON/SSE), WASI P3/async, GC collector upgrade, liveness-based regalloc
 
 ## Known Limitations
@@ -236,7 +237,7 @@ SIMD functions fall back to the slower stack interpreter with per-instruction di
 **Planned fix**: Extend register IR with `v128` register support (Phase 1), then add selective
 JIT NEON/SSE emission (Phase 2). See `.dev/simd-analysis.md` for the detailed roadmap.
 
-Scalar (non-SIMD) performance is unaffected — 14/23 scalar benchmarks beat wasmtime.
+Scalar (non-SIMD) performance is unaffected — 16/29 scalar benchmarks beat wasmtime.
 
 ## Versioning
 

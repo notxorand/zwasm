@@ -5,6 +5,27 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+- Real-world compatibility tests: 30 programs (C, C++, Go, Rust) verified against wasmtime
+- On-Stack Replacement (OSR) for back-edge JIT: enter at loop body, bypass prologue side effects
+- 11 new unit tests (521 total)
+- E2E tests expanded: 792/792 assertions (from 356)
+
+### Fixed
+- JIT self-call stack overflow use-after-free (E2E segfault on aarch64)
+- Back-edge JIT restart corrupting Go WASI state machines (side-effect detection)
+- ARM64 OSR prologue: push FP callee-saved d8-d15 (stack corruption fix)
+- x86_64 OSR prologue: load physically-mapped vregs (stale register fix)
+- x86_64 select aliasing: val2 clobbered when rd == val2_idx
+- JIT IR instruction limit (MAX_JIT_IR_INSTRS=1500) prevents miscompilation of large functions
+- Go state machine detection: br_table boundary inclusive of target instruction
+
+### Changed
+- Benchmark results: 20/29 match or beat wasmtime, 27/29 within 1.5x (up from 14/23)
+- st_sieve: 0.97x wasmtime (restored from 30.82x regression via OSR)
+- GC benchmarks: gc_alloc 0.50x, gc_tree 0.73x wasmtime (JIT for struct ops)
+- nbody: 0.97x wasmtime (FP cache D2-D15 expansion)
+
 ## [1.1.0] - 2026-02-18
 
 ### Added
@@ -18,7 +39,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 ### Changed
 - Binary size: 1.31 MB (ReleaseSafe, from 1.28 MB — WAT parser improvements)
 - Runtime memory: 3.44 MB RSS (fib benchmark)
-- Benchmark results: 14/23 match or beat wasmtime (up from 13/21)
+- Benchmark results: 14/23 match or beat wasmtime (up from 13/21, at v1.1.0 time)
 - Updated all documentation with fresh benchmark data
 
 ### Known Limitations

@@ -7,7 +7,7 @@ Thank you for your interest in contributing!
 ```bash
 git clone https://github.com/clojurewasm/zwasm.git
 cd zwasm
-zig build test    # Run all tests (~510)
+zig build test    # Run all tests (~521)
 ```
 
 Requires **Zig 0.15.2**. See [Requirements](#requirements) for optional tools.
@@ -48,16 +48,20 @@ src/
   wat.zig         WAT text format parser
   cli.zig         CLI frontend
   instance.zig    Module instantiation
+  component.zig   Component Model decoder
+  wit.zig         WIT type system
+  canon_abi.zig   Canonical ABI
 test/
   spec/           WebAssembly spec tests (62,158 tests)
-  e2e/            End-to-end tests (356 assertions)
+  e2e/            End-to-end tests (792 assertions)
+  realworld/      Real-world compatibility tests (30 programs)
   fuzz/           Fuzz testing infrastructure
 bench/
   run_bench.sh    Benchmark runner
   wasm/           Benchmark wasm modules
 examples/
   zig/            Zig embedding examples (5 files)
-  wat/            Educational WAT examples (25 files)
+  wat/            Educational WAT examples (33 files)
 ```
 
 ## CI checks
@@ -66,7 +70,7 @@ PRs are automatically checked for:
 
 - Unit tests pass (macOS + Ubuntu)
 - Spec tests pass (62,158 tests)
-- E2E tests pass (356 assertions)
+- E2E tests pass (792 assertions)
 - Binary size <= 1.5 MB
 - No benchmark regression > 20%
 - ReleaseSafe build success
