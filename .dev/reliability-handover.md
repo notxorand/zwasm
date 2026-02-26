@@ -3,22 +3,21 @@
 > Plan: `@./.dev/reliability-plan.md`. Rules: `@./.claude/rules/reliability-work.md`.
 
 ## Branch
-`strictly-check/reliability-003` (from main at d55a72b)
+`strictly-check/reliability-004` (from main at 74153ff, after P1+P2 merge)
 
-**Merge gate**: Do NOT merge to main until P1 (rw_c_string hang) + P2 (nbody regression) are fixed.
-No regressions allowed on main. After P1+P2: Merge Gate check → merge → reliability-004 for P3-P5.
+P1+P2 merged to main. Remaining: P3-P5.
 
 ## Current: Plan A — Incremental regression fix + feature implementation
 
 ### Active Phase
-**Phase 3: rw_c_math re-measure** (Priority C) — P1+P2 done, merge gate next
+**All phases complete.** Ready for merge gate.
 
 ### Phase Checklist
 - [x] **P1**: rw_c_string hang fix — skip back-edge JIT for reentry guard functions (20.2ms, was timeout)
-- [x] **P2**: nbody FP cache fix — expand D-reg cache D2-D15 + FP-aware MOV (23.1ms, was 43.8ms)
-- [ ] **P3**: rw_c_math re-measure — check P2 ripple effect, decide on further optimization
-- [ ] **P4**: GC JIT basic implementation — JIT-compile struct/array ops
-- [ ] **P5**: st_matrix accept — ≤3.5x exception (single-pass limit)
+- [x] **P2**: nbody FP cache fix — expand D-reg cache D2-D15 + FP-aware MOV (23.1ms, 0.97x wasmtime)
+- [x] **P3**: rw_c_math — accepted as regalloc limit (58ms, 4.92x, 136 regs / 1381 IR instrs)
+- [x] **P4**: GC JIT basic implementation — predecode+regalloc+JIT for struct ops (gc_alloc 0.50x, gc_tree 0.73x wasmtime)
+- [x] **P5**: st_matrix — accepted as regalloc limit exception (296ms, 3.23x wasmtime, 35 vregs)
 
 ### Per-Phase Workflow (important)
 ```
@@ -31,23 +30,22 @@ No regressions allowed on main. After P1+P2: Merge Gate check → merge → reli
 7. Proceed to next phase
 ```
 
-## Latest Benchmark Snapshot (a26a178, runs=5/warmup=3)
+## Latest Benchmark Snapshot (P4, runs=5/warmup=3)
 
-### >1.5x wasmtime (action required)
+### Accepted exceptions (regalloc limit — single-pass architecture)
 | bench | zwasm | wasmtime | ratio | Phase |
 |-------|------:|--------:|------:|-------|
-| rw_c_math | 58.0 | 11.8 | 4.92x | P3 |
-| gc_alloc | 19.2 | 10.7 | 1.79x | P4 |
-| gc_tree | 138.1 | 31.4 | 4.40x | P4 |
-| st_matrix | 296.3 | 91.7 | 3.23x | P5 (exception) |
+| rw_c_math | 59.7 | 11.8 | 5.06x | P3 (136 vregs / 1381 IR instrs) |
+| st_matrix | 296.4 | 91.7 | 3.23x | P5 (35 vregs, matrix multiply) |
 
-### ≤1.5x wasmtime (OK — 25 benchmarks)
+### ≤1.5x wasmtime (OK — 27 benchmarks)
 fib 0.88x, tak 0.86x, sieve 0.51x, nbody 0.97x, nqueens 0.65x, tgo_tak 0.62x,
 tgo_arith 0.40x, tgo_sieve 0.61x, tgo_fib_loop 0.51x, tgo_gcd 0.38x,
 tgo_list 0.53x, tgo_strops 0.95x, st_sieve 0.94x, st_nestedloop 0.56x,
 st_ackermann 0.48x, rw_c_matrix 0.82x, rw_c_string 1.06x, rw_cpp_string 0.49x,
 rw_cpp_sort 0.53x, tgo_rwork 1.03x, tgo_fib 1.18x, tgo_nqueens 1.19x,
-st_fib2 1.35x, tgo_mfr 1.42x, rw_rust_fib 1.22x
+st_fib2 1.35x, tgo_mfr 1.42x, rw_rust_fib 1.22x,
+gc_alloc 0.50x, gc_tree 0.73x
 
 ## Completed (reliability-003)
 - A-F: Environment, compilation, compat, E2E, benchmarks, analysis
