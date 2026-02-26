@@ -14,7 +14,7 @@
 4. Phase H Gate pass → merge to main → CI green → Phase H (41-file doc audit)
 
 ### Active Phase
-**R1: E2E segfault investigation + fix**
+**R6: Phase H Gate verification**
 
 ### Phase Checklist
 
@@ -28,12 +28,11 @@
 - [x] **R4**: c_hello_wasi Ubuntu fix — same root cause as R2 (back-edge JIT restart)
 
 #### Test expansion (12 → 30)
-- [ ] **R5**: Add 18 new real-world test programs across C/C++/Go/Rust
-  - Minimize feature overlap with existing 12
-  - Cover: integer math, FP math, string/array ops, recursion, I/O, env vars,
-    CLI args, data structures, bitwise ops, memory alloc, control flow, etc.
-  - All must PASS on Mac + Ubuntu (DIFF = 0)
-  - and also add realworld benchmarks (run_bench.sh, record.sh, compare_runtimes.sh, record_comparison.sh)
+- [x] **R5**: Add 18 new real-world test programs (30/30 Mac + Ubuntu)
+  - 5 C, 4 C++, 4 Go, 5 Rust — covers integer/FP math, strings, data structures,
+    sorting, recursion, control flow, error handling, function pointers
+  - JIT IR instruction limit (MAX_JIT_IR_INSTRS=1500) prevents miscompilation of large functions
+  - x86_64 select aliasing fix — val2 clobbered when rd == val2_idx (a87495b)
 
 #### Merge + Phase H
 - [ ] **R6**: Phase H Gate — all 9 conditions pass (Mac + Ubuntu)

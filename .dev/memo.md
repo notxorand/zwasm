@@ -17,11 +17,11 @@ Plan: `@./.dev/reliability-plan.md`. Progress: `@./.dev/reliability-handover.md`
 
 **reliability-005: Real-world DIFF fix + test expansion + Phase H**
 - [x] R0: CI + gate update (E2E/compat in gates, memory check, WASI SDK in CI)
-- [ ] R1: E2E segfault fix (Mac aarch64 e2e_runner poison crash)
-- [ ] R2: Go WASI fix (3 programs no output)
-- [ ] R3: cpp_string_ops Ubuntu fix (25000 vs 24995)
-- [ ] R4: c_hello_wasi Ubuntu fix (EXIT=71)
-- [ ] R5: Add 18 new real-world test programs (12 → 30, all PASS) and benchmarks
+- [x] R1: E2E segfault fix — JIT self-call stack overflow use-after-free (d289d44)
+- [x] R2: Go WASI fix — back-edge JIT restart side-effect detection (806cb7d)
+- [x] R3: cpp_string_ops Ubuntu fix — same root cause as R2
+- [x] R4: c_hello_wasi Ubuntu fix — same root cause as R2
+- [x] R5: 18 new real-world tests + JIT IR limit + x86 select fix (30/30 Mac+Ubuntu)
 - [ ] R6: Phase H Gate pass (all 9 conditions)
 - [ ] R7: Merge to main, push, CI green
 - [ ] R8: Phase H — 41-file documentation audit
