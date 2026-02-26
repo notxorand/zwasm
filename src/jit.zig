@@ -373,6 +373,16 @@ const a64 = struct {
         return 0xF8606800 | (@as(u32, rm) << 16) | (@as(u32, rn) << 5) | rt;
     }
 
+    /// LDR Dt, [Xn, Xm] — load 64-bit FP, register offset.
+    fn ldrFp64Reg(dt: u5, xn: u5, xm: u5) u32 {
+        return 0xFC606800 | (@as(u32, xm) << 16) | (@as(u32, xn) << 5) | dt;
+    }
+
+    /// STR Dt, [Xn, Xm] — store 64-bit FP, register offset.
+    fn strFp64Reg(dt: u5, xn: u5, xm: u5) u32 {
+        return 0xFC206800 | (@as(u32, xm) << 16) | (@as(u32, xn) << 5) | dt;
+    }
+
     /// LDRB Wt, [Xn, Xm] — load byte unsigned, register offset.
     fn ldrbReg(rt: u5, rn: u5, rm: u5) u32 {
         return 0x38606800 | (@as(u32, rm) << 16) | (@as(u32, rn) << 5) | rt;
@@ -2428,7 +2438,7 @@ pub const Compiler = struct {
             0x28 => self.emitMemLoad(instr, .w32, 4),   // i32.load
             0x29 => self.emitMemLoad(instr, .x64, 8),   // i64.load
             0x2A => self.emitMemLoad(instr, .w32, 4),   // f32.load (same bits as i32)
-            0x2B => self.emitMemLoad(instr, .x64, 8),   // f64.load (same bits as i64)
+            0x2B => self.emitFpMemLoad64(instr),          // f64.load → FP cache direct
             0x2C => self.emitMemLoad(instr, .s8_32, 1),  // i32.load8_s
             0x2D => self.emitMemLoad(instr, .u8, 1),    // i32.load8_u
             0x2E => self.emitMemLoad(instr, .s16_32, 2), // i32.load16_s
@@ -2445,7 +2455,7 @@ pub const Compiler = struct {
             0x36 => self.emitMemStore(instr, .w32, 4),  // i32.store
             0x37 => self.emitMemStore(instr, .x64, 8),  // i64.store
             0x38 => self.emitMemStore(instr, .w32, 4),  // f32.store
-            0x39 => self.emitMemStore(instr, .x64, 8),  // f64.store
+            0x39 => self.emitFpMemStore64(instr),         // f64.store → FP cache direct
             0x3A => self.emitMemStore(instr, .b8, 1),   // i32.store8
             0x3B => self.emitMemStore(instr, .h16, 1),  // i32.store16
             0x3C => self.emitMemStore(instr, .b8, 1),   // i64.store8
@@ -2565,6 +2575,10 @@ pub const Compiler = struct {
     const BinOp32 = enum { add, sub, mul, @"and", @"or", xor, shl, shr_s, shr_u };
 
     fn emitBinop32(self: *Compiler, op: BinOp32, instr: RegInstr) void {
+        // Constant-folding for ADD/SUB with imm12 operand
+        if (op == .add or op == .sub) {
+            if (self.tryEmitBinopImm32(op, instr)) return;
+        }
         const rs1 = self.getOrLoad(instr.rs1, SCRATCH);
         const rs2 = self.getOrLoad(instr.rs2(), SCRATCH2);
         const d = destReg(instr.rd);
@@ -2586,6 +2600,10 @@ pub const Compiler = struct {
     const BinOp64 = enum { add, sub, mul, @"and", @"or", xor, shl, shr_s, shr_u };
 
     fn emitBinop64(self: *Compiler, op: BinOp64, instr: RegInstr) void {
+        // Constant-folding for ADD/SUB with imm12 operand
+        if (op == .add or op == .sub) {
+            if (self.tryEmitBinopImm64(op, instr)) return;
+        }
         const rs1 = self.getOrLoad(instr.rs1, SCRATCH);
         const rs2 = self.getOrLoad(instr.rs2(), SCRATCH2);
         const d = destReg(instr.rd);
@@ -2602,6 +2620,65 @@ pub const Compiler = struct {
         };
         self.emit(enc);
         self.storeVreg(instr.rd, d);
+    }
+
+    /// Try to emit ADD/SUB with immediate operand (saves one register load).
+    /// Returns true if emitted, false if not applicable.
+    fn tryEmitBinopImm32(self: *Compiler, op: BinOp32, instr: RegInstr) bool {
+        const rs2_vreg = instr.rs2();
+        // Check rs2 for known constant
+        if (rs2_vreg < 128) {
+            if (self.known_consts[rs2_vreg]) |c| {
+                if (c <= 0xFFF) {
+                    const rs1 = self.getOrLoad(instr.rs1, SCRATCH);
+                    const d = destReg(instr.rd);
+                    self.emit(if (op == .add) a64.addImm32(d, rs1, @intCast(c)) else a64.subImm32(d, rs1, @intCast(c)));
+                    self.storeVreg(instr.rd, d);
+                    return true;
+                }
+            }
+        }
+        // For ADD (commutative): check if rs1 is a known constant
+        if (op == .add and instr.rs1 < 128) {
+            if (self.known_consts[instr.rs1]) |c| {
+                if (c <= 0xFFF) {
+                    const rs2 = self.getOrLoad(rs2_vreg, SCRATCH);
+                    const d = destReg(instr.rd);
+                    self.emit(a64.addImm32(d, rs2, @intCast(c)));
+                    self.storeVreg(instr.rd, d);
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /// Try to emit ADD/SUB with immediate operand (64-bit).
+    fn tryEmitBinopImm64(self: *Compiler, op: BinOp64, instr: RegInstr) bool {
+        const rs2_vreg = instr.rs2();
+        if (rs2_vreg < 128) {
+            if (self.known_consts[rs2_vreg]) |c| {
+                if (c <= 0xFFF) {
+                    const rs1 = self.getOrLoad(instr.rs1, SCRATCH);
+                    const d = destReg(instr.rd);
+                    self.emit(if (op == .add) a64.addImm64(d, rs1, @intCast(c)) else a64.subImm64(d, rs1, @intCast(c)));
+                    self.storeVreg(instr.rd, d);
+                    return true;
+                }
+            }
+        }
+        if (op == .add and instr.rs1 < 128) {
+            if (self.known_consts[instr.rs1]) |c| {
+                if (c <= 0xFFF) {
+                    const rs2 = self.getOrLoad(rs2_vreg, SCRATCH);
+                    const d = destReg(instr.rd);
+                    self.emit(a64.addImm64(d, rs2, @intCast(c)));
+                    self.storeVreg(instr.rd, d);
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     /// Try to fuse a CMP result with a following BR_IF/BR_IF_NOT.
@@ -2945,6 +3022,65 @@ pub const Compiler = struct {
         const val_reg = self.getOrLoad(instr.rd, SCRATCH2);
         self.emit(emitStoreInstr(kind, val_reg, MEM_BASE, SCRATCH));
         // SCRATCH holds effective address, not a vreg value — invalidate cache
+        self.scratch_vreg = null;
+    }
+
+    /// Emit f64.load directly into FP D-register cache (skips GPR intermediate).
+    fn emitFpMemLoad64(self: *Compiler, instr: RegInstr) void {
+        // Allocate FP result D-reg FIRST — eviction may clobber SCRATCH.
+        const dreg = self.fpAllocResult(instr.rd);
+
+        // Fast path: const-addr with guaranteed in-bounds
+        if (self.isConstAddrSafe(instr.rs1, instr.operand, 8)) |eff_addr| {
+            self.emitLoadImm(SCRATCH, eff_addr);
+            self.emit(a64.ldrFp64Reg(dreg, MEM_BASE, SCRATCH));
+            return;
+        }
+
+        // 1. Compute effective address
+        const addr_reg = self.getOrLoad(instr.rs1, SCRATCH);
+        self.emit(a64.uxtw(SCRATCH, addr_reg));
+        self.emitAddOffset(SCRATCH, instr.operand);
+
+        // 2. Bounds check
+        if (!self.use_guard_pages) {
+            self.emit(a64.addImm64(SCRATCH2, SCRATCH, 8));
+            self.emit(a64.cmp64(SCRATCH2, MEM_SIZE));
+            self.emitCondError(.hi, 6);
+        }
+
+        // 3. Load directly to D-register (no GPR intermediate)
+        self.emit(a64.ldrFp64Reg(dreg, MEM_BASE, SCRATCH));
+        self.scratch_vreg = null;
+    }
+
+    /// Emit f64.store directly from FP D-register cache (skips GPR intermediate).
+    fn emitFpMemStore64(self: *Compiler, instr: RegInstr) void {
+        // Load value to D-register FIRST — fpLoadToDreg may clobber SCRATCH.
+        const dreg = self.fpLoadToDreg(instr.rd);
+
+        // Fast path: const-addr with guaranteed in-bounds
+        if (self.isConstAddrSafe(instr.rs1, instr.operand, 8)) |eff_addr| {
+            self.emitLoadImm(SCRATCH, eff_addr);
+            self.emit(a64.strFp64Reg(dreg, MEM_BASE, SCRATCH));
+            self.scratch_vreg = null;
+            return;
+        }
+
+        // 1. Compute effective address
+        const addr_reg = self.getOrLoad(instr.rs1, SCRATCH);
+        self.emit(a64.uxtw(SCRATCH, addr_reg));
+        self.emitAddOffset(SCRATCH, instr.operand);
+
+        // 2. Bounds check
+        if (!self.use_guard_pages) {
+            self.emit(a64.addImm64(SCRATCH2, SCRATCH, 8));
+            self.emit(a64.cmp64(SCRATCH2, MEM_SIZE));
+            self.emitCondError(.hi, 6);
+        }
+
+        // 3. Store from D-register directly (no GPR intermediate)
+        self.emit(a64.strFp64Reg(dreg, MEM_BASE, SCRATCH));
         self.scratch_vreg = null;
     }
 
