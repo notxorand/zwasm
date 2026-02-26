@@ -3479,13 +3479,12 @@ pub const Vm = struct {
     ) WasmError!void {
         count.* += 1;
         if (count.* == jit_mod.BACK_EDGE_THRESHOLD) {
-            // W34 fix: skip back-edge JIT for functions with reentry guards.
-            // C/C++ _start functions have an init guard that sets a memory flag
-            // and branches to `unreachable` on re-entry. Back-edge JIT restarts
-            // the function from the beginning, triggering this guard.
+            // W34: functions with reentry guards (C/C++ init patterns) cannot use
+            // JitRestart — re-execution from pc=0 triggers the guard trap.
+            // Requires OSR (on-stack replacement) to optimize these functions.
             if (hasReentryGuard(reg.code)) {
                 wf.jit_failed = true;
-                if (trace) |tc| trace_mod.traceJitBail(tc, wf.func_idx, "W34: reentry guard detected");
+                if (trace) |tc| trace_mod.traceJitBail(tc, wf.func_idx, "W34: reentry guard (needs OSR)");
                 return;
             }
             wf.jit_code = jit_mod.compileFunction(alloc, reg, pool64, wf.func_idx, param_count, result_count, trace, min_memory_bytes, use_guard_pages);
@@ -3500,17 +3499,12 @@ pub const Vm = struct {
 
     /// Detect C/C++ reentry guard: early branch to `unreachable` based on
     /// a memory load. Pattern: load → eqz → br_if_not → (target is unreachable).
-    /// Back-edge JIT must not restart such functions because the interpreter's
-    /// partial execution already set the init flag, causing the guard to fire.
     fn hasReentryGuard(ir: []const regalloc_mod.RegInstr) bool {
-        // Scan the first 8 instructions for br_if_not whose target is unreachable
         const limit = @min(ir.len, 8);
         for (ir[0..limit]) |instr| {
             if (instr.op == regalloc_mod.OP_BR_IF_NOT or instr.op == regalloc_mod.OP_BR_IF) {
                 const target = instr.operand;
-                if (target < ir.len and ir[target].op == 0x00) { // 0x00 = unreachable
-                    return true;
-                }
+                if (target < ir.len and ir[target].op == 0x00) return true;
             }
         }
         return false;
