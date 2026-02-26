@@ -5,6 +5,9 @@
 ## Branch
 `strictly-check/reliability-003` (from main at d55a72b)
 
+**マージ条件**: P1 (rw_c_string hang) + P2 (nbody regression) を修正するまで main にマージ禁止。
+リグレッションを main に入れない。P1+P2 完了 → Merge Gate → main マージ → reliability-004 で P3-P5。
+
 ## Current: Plan A (段階的リグレッション修正 + 機能実装)
 
 ### Active Phase

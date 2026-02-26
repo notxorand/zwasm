@@ -13,6 +13,7 @@ Session handover document. Read at session start.
 ## Current Task
 
 Reliability improvement (branch: `strictly-check/reliability-003`).
+**P1+P2 完了まで main マージ禁止** (nbody regression + rw_c_string hang)。
 Plan: `@./.dev/reliability-plan.md`. Progress: `@./.dev/reliability-handover.md`.
 
 **Plan A: 段階的リグレッション修正 + 機能実装**
