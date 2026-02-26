@@ -9,6 +9,10 @@ A small, fast WebAssembly runtime written in Zig. Library and CLI.
 
 ## Why zwasm
 
+> **Note**: zwasm is under active development. Real-world Wasm compatibility
+> testing and benchmark verification are ongoing. The API and behavior may
+> change between releases. Not yet recommended for production use.
+
 Most Wasm runtimes are either fast but large (wasmtime ~56MB) or small but slow (wasm3 ~0.3MB, interpreter only). zwasm targets the gap between them: **~1.3MB with ARM64 + x86_64 JIT compilation**.
 
 | Runtime  | Binary  | Memory | JIT            |
