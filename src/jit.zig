@@ -3625,11 +3625,14 @@ pub const Compiler = struct {
                 self.emit(a64.movz64(SCRATCH2, @truncate(needed), 0));
                 self.emit(a64.add64(REG_PTR_VAL, REG_PTR_VAL, SCRATCH2));
             }
-            // Check: new reg_ptr > REG_STACK_SIZE → stack overflow
-            // x28 = depth counter (not REG_STACK_SIZE), use inline immediate.
-            self.emit(a64.movz64(SCRATCH, vm_mod.REG_STACK_SIZE, 0));
-            self.emit(a64.cmp64(REG_PTR_VAL, SCRATCH));
-            self.emitCondError(.hi, 2); // StackOverflow if new > max
+            // For self-call-only: depth check (MAX_CALL_DEPTH) subsumes overflow check
+            // when MAX_CALL_DEPTH * frame_size <= REG_STACK_SIZE (true for reg_count <= 28).
+            if (!self.self_call_only or @as(u32, vm_mod.MAX_CALL_DEPTH) * needed > vm_mod.REG_STACK_SIZE) {
+                // Check: new reg_ptr > REG_STACK_SIZE → stack overflow
+                self.emit(a64.movz64(SCRATCH, vm_mod.REG_STACK_SIZE, 0));
+                self.emit(a64.cmp64(REG_PTR_VAL, SCRATCH));
+                self.emitCondError(.hi, 2); // StackOverflow if new > max
+            }
             if (!self.self_call_only) {
                 // Write updated reg_ptr to memory for trampoline calls to read.
                 // Self-call-only functions keep reg_ptr purely in x27 (no memory sync).
