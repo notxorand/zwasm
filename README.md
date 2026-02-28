@@ -21,7 +21,7 @@ Most Wasm runtimes are either fast but large (wasmtime ~56MB) or small but slow 
 | wasmtime | 56MB    | ~12MB  | Cranelift      |
 | wasm3    | 0.3MB   | ~1MB   | None           |
 
-zwasm was extracted from [ClojureWasm](https://github.com/niclas-ahden/ClojureWasm) (a Zig reimplementation of Clojure) where optimizing a Wasm subsystem inside a language runtime created a "runtime within runtime" problem. Separating it produced a cleaner codebase, independent optimization, and a reusable library. ClojureWasm remains the primary consumer.
+zwasm was extracted from [ClojureWasm](https://github.com/clojurewasm/ClojureWasm) (a Zig reimplementation of Clojure) where optimizing a Wasm subsystem inside a language runtime created a "runtime within runtime" problem. Separating it produced a cleaner codebase, independent optimization, and a reusable library. ClojureWasm remains the primary consumer.
 
 ## Features
 
