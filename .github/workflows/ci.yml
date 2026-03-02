@@ -116,7 +116,20 @@ jobs:
           echo "PASS: Within 4.5 MB limit"
 
       - name: Install wasmtime
-        run: curl https://wasmtime.dev/install.sh -sSf | bash
+        env:
+          WASMTIME_VERSION: "42.0.1"
+        run: |
+          if [ "$(uname)" = "Darwin" ]; then
+            ARCH="aarch64"; OS="macos"
+          else
+            ARCH="x86_64"; OS="linux"
+          fi
+          ARCHIVE="wasmtime-v${WASMTIME_VERSION}-${ARCH}-${OS}.tar.xz"
+          curl -L -o /tmp/wasmtime.tar.xz \
+            "https://github.com/bytecodealliance/wasmtime/releases/download/v${WASMTIME_VERSION}/${ARCHIVE}"
+          mkdir -p "$HOME/.wasmtime/bin"
+          tar xJf /tmp/wasmtime.tar.xz -C /tmp
+          cp "/tmp/wasmtime-v${WASMTIME_VERSION}-${ARCH}-${OS}/wasmtime" "$HOME/.wasmtime/bin/"
 
       - name: Install WASI SDK
         env:
