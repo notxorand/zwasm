@@ -148,3 +148,36 @@ production runtimes (V8, wasmtime) handle short-lived GC objects.
 **Rejected**: Generational GC — too complex for the current heap model. Nursery/tenured
 split requires write barriers and remembered sets. The adaptive threshold gives most of
 the benefit (avoiding useless collections) without the complexity.
+
+---
+
+## D124: Module cache — predecoded IR serialization
+
+**Context**: Phase 1.2. Repeated execution of the same wasm module re-parses and
+re-predecodes all functions. For large modules (1000+ functions), predecode is the
+dominant startup cost after validation.
+
+**Decision**: Serialize predecoded IR (`PreInstr` + `pool64`) to disk at
+`~/.cache/zwasm/<sha256>.zwcache`. Cache key is SHA-256 of the wasm binary.
+Cache includes a version field (invalidated on zwasm version change).
+
+**Format** (little-endian):
+- Magic: `ZWCACHE\0` (8 bytes)
+- Version: u32
+- Wasm hash: [32]u8 (SHA-256)
+- Num functions: u32
+- Per function: code_len u32, pool_len u32, code bytes, pool bytes
+
+`PreInstr` is `extern struct` (8 bytes, deterministic layout), so code is stored as
+raw bytes — no per-field serialization needed. Zero-copy on read via `@memcpy`.
+
+**CLI**: `zwasm run --cache file.wasm` (load/save automatically),
+`zwasm compile file.wasm` (AOT predecode all functions, save cache).
+
+**Trade-off**: Cache is per-binary (SHA-256), not per-function. A single-byte change
+in the wasm file invalidates the entire cache. Acceptable: wasm modules are typically
+immutable artifacts. Version field allows future format changes without silent corruption.
+
+**Not cached**: RegIR and JIT native code. RegIR depends on runtime state (function
+indices, memory layout). JIT code contains absolute addresses. Both regenerated at
+runtime from predecoded IR (fast: <1ms per function).

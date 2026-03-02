@@ -22,6 +22,7 @@ const build_options = @import("build_options");
 const component_mod = @import("component.zig");
 const guard_mod = @import("guard.zig");
 const jit_mod = vm_mod.jit_mod;
+const cache_mod = @import("cache.zig");
 
 pub fn main() !void {
     // Install signal handler for JIT guard page OOB traps
@@ -62,6 +63,10 @@ pub fn main() !void {
         const ok = try cmdValidate(allocator, args[2..], stdout, stderr);
         try stdout.flush();
         if (!ok) std.process.exit(1);
+    } else if (std.mem.eql(u8, command, "compile")) {
+        const ok = try cmdCompile(allocator, args[2..], stdout, stderr);
+        try stdout.flush();
+        if (!ok) std.process.exit(1);
     } else if (std.mem.eql(u8, command, "features")) {
         cmdFeatures(args[2..], stdout, stderr);
     } else if (std.mem.eql(u8, command, "help") or std.mem.eql(u8, command, "--help") or std.mem.eql(u8, command, "-h")) {
@@ -89,6 +94,7 @@ fn printUsage(w: *std.Io.Writer) void {
         \\  zwasm <file.wasm|.wat> [options] [args...]
         \\  zwasm run <file.wasm|.wat> [options] [args...]
         \\  zwasm inspect [--json] <file.wasm|.wat>
+        \\  zwasm compile <file.wasm|.wat>
         \\  zwasm validate <file.wasm|.wat>
         \\  zwasm features [--json]
         \\  zwasm version
@@ -111,6 +117,7 @@ fn printUsage(w: *std.Io.Writer) void {
         \\  --fuel <N>          Instruction fuel limit (traps when exhausted)
         \\  --trace=CATS        Trace categories: jit,regir,exec,mem,call (comma-separated)
         \\  --dump-regir=N      Dump RegIR for function index N
+        \\  --cache             Cache predecoded IR to disk for faster startup
         \\  --dump-jit=N        Dump JIT disassembly for function index N
         \\
     , .{}) catch {};
@@ -126,6 +133,7 @@ fn cmdRun(allocator: Allocator, args: []const []const u8, stdout: *std.Io.Writer
     var func_args_start: usize = 0;
     var batch_mode = false;
     var profile_mode = false;
+    var cache_mode = false;
     var trace_categories: u8 = 0;
     var dump_regir_func: ?u32 = null;
     var dump_jit_func: ?u32 = null;
@@ -150,6 +158,8 @@ fn cmdRun(allocator: Allocator, args: []const []const u8, stdout: *std.Io.Writer
     while (i < args.len) : (i += 1) {
         if (std.mem.eql(u8, args[i], "--batch")) {
             batch_mode = true;
+        } else if (std.mem.eql(u8, args[i], "--cache")) {
+            cache_mode = true;
         } else if (std.mem.eql(u8, args[i], "--profile")) {
             profile_mode = true;
         } else if (std.mem.eql(u8, args[i], "--invoke")) {
@@ -397,6 +407,18 @@ fn cmdRun(allocator: Allocator, args: []const []const u8, stdout: *std.Io.Writer
         };
         defer module.deinit();
 
+        // Apply cached IR if available
+        var wasm_hash: [32]u8 = undefined;
+        var cache_hit = false;
+        if (cache_mode) {
+            wasm_hash = cache_mod.wasmHash(wasm_bytes);
+            if (cache_mod.loadFromFile(allocator, wasm_hash) catch null) |cached| {
+                cache_mod.applyCachedIr(cached, module.store.functions.items, module.module.num_imported_funcs);
+                allocator.free(cached); // IrFuncs transferred to WasmFunctions
+                cache_hit = true;
+            }
+        }
+
         // Enable profiling if requested (note: disables JIT for accurate opcode counting)
         var profile = vm_mod.Profile.init();
         if (profile_mode) {
@@ -504,6 +526,11 @@ fn cmdRun(allocator: Allocator, args: []const []const u8, stdout: *std.Io.Writer
         try stdout.flush();
 
         if (profile_mode) printProfile(&profile, stderr);
+
+        // Save cache on first run
+        if (cache_mode and !cache_hit) {
+            saveCacheQuietly(allocator, wasm_hash, module.store.functions.items, module.module.num_imported_funcs);
+        }
     } else {
         // Build WASI args: [wasm_path] ++ remaining args
         const wasi_str_args = args[func_args_start..];
@@ -530,6 +557,18 @@ fn cmdRun(allocator: Allocator, args: []const []const u8, stdout: *std.Io.Writer
             return false;
         };
         defer module.deinit();
+
+        // Apply cached IR if available
+        var wasi_wasm_hash: [32]u8 = undefined;
+        var wasi_cache_hit = false;
+        if (cache_mode) {
+            wasi_wasm_hash = cache_mod.wasmHash(wasm_bytes);
+            if (cache_mod.loadFromFile(allocator, wasi_wasm_hash) catch null) |cached| {
+                cache_mod.applyCachedIr(cached, module.store.functions.items, module.module.num_imported_funcs);
+                allocator.free(cached); // IrFuncs transferred to WasmFunctions
+                wasi_cache_hit = true;
+            }
+        }
 
         // Enable profiling if requested
         var wasi_profile = vm_mod.Profile.init();
@@ -570,7 +609,81 @@ fn cmdRun(allocator: Allocator, args: []const []const u8, stdout: *std.Io.Writer
         if (module.getWasiExitCode()) |code| {
             if (code != 0) std.process.exit(@truncate(code));
         }
+
+        // Save cache on first run
+        if (cache_mode and !wasi_cache_hit) {
+            saveCacheQuietly(allocator, wasi_wasm_hash, module.store.functions.items, module.module.num_imported_funcs);
+        }
     }
+    return true;
+}
+
+/// Save IR cache to disk, silently ignoring errors.
+fn saveCacheQuietly(allocator: Allocator, hash: [32]u8, funcs: []store_mod.Function, num_imports: u32) void {
+    const ir_funcs = cache_mod.collectIrFuncs(allocator, funcs, num_imports) catch return;
+    defer allocator.free(ir_funcs);
+    cache_mod.saveToFile(allocator, hash, ir_funcs) catch {};
+}
+
+const store_mod = @import("store.zig");
+
+// ============================================================
+// zwasm compile
+// ============================================================
+
+fn cmdCompile(allocator: Allocator, args: []const []const u8, stdout: *std.Io.Writer, stderr: *std.Io.Writer) !bool {
+    _ = stdout;
+    if (args.len == 0) {
+        try stderr.print("error: no wasm file specified\nUsage: zwasm compile <file.wasm|.wat>\n", .{});
+        try stderr.flush();
+        return false;
+    }
+
+    const path = args[0];
+    const wasm_bytes = readWasmFile(allocator, path) catch |err| {
+        try stderr.print("error: cannot read '{s}': {s}\n", .{ path, @errorName(err) });
+        try stderr.flush();
+        return false;
+    };
+    defer allocator.free(wasm_bytes);
+
+    // Load module (with WASI to handle any imports)
+    var module = types.WasmModule.loadWasi(allocator, wasm_bytes) catch |err| {
+        try stderr.print("error: failed to load module: {s}\n", .{formatWasmError(err)});
+        try stderr.flush();
+        return false;
+    };
+    defer module.deinit();
+
+    // Predecode all functions and save to cache
+    const hash = cache_mod.wasmHash(wasm_bytes);
+    const ir_funcs = cache_mod.collectIrFuncs(allocator, module.store.functions.items, module.module.num_imported_funcs) catch |err| {
+        try stderr.print("error: failed to predecode: {s}\n", .{@errorName(err)});
+        try stderr.flush();
+        return false;
+    };
+    defer allocator.free(ir_funcs);
+
+    cache_mod.saveToFile(allocator, hash, ir_funcs) catch |err| {
+        try stderr.print("error: failed to save cache: {s}\n", .{@errorName(err)});
+        try stderr.flush();
+        return false;
+    };
+
+    // Count predecoded functions
+    var predecoded: usize = 0;
+    for (ir_funcs) |ir| {
+        if (ir != null) predecoded += 1;
+    }
+
+    const cache_path = cache_mod.getCachePath(allocator, hash) catch {
+        try stderr.print("compiled {d}/{d} functions\n", .{ predecoded, ir_funcs.len });
+        try stderr.flush();
+        return true;
+    };
+    defer allocator.free(cache_path);
+    try stderr.print("compiled {d}/{d} functions → {s}\n", .{ predecoded, ir_funcs.len, cache_path });
+    try stderr.flush();
     return true;
 }
 

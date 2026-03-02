@@ -12,18 +12,20 @@ Session handover document. Read at session start.
 
 ## Current Task
 
-Phase 1: Guard Pages + Module Cache (see `roadmap.md` Phase 1).
+Phase 1 complete. Ready for Merge Gate → v1.3.0.
 
-### 1.1 Virtual Memory Guard Pages
+### Completed: Phase 1 — Guard Pages + Module Cache
 
-Eliminate per-load/store bounds check. mmap(8GB) + mprotect + SIGSEGV trap.
-Files: memory.zig, jit.zig, x86.zig, vm.zig. Decision: D123.
-Expected: 1.5-2x on memory-intensive benchmarks.
+**1.1 Guard Pages**: Already implemented (guard.zig, memory.zig, store.zig, jit.zig,
+x86.zig, cli.zig). JIT bounds check elimination active.
 
-### 1.2 Module Cache / AOT Serialize
+**1.2 Module Cache (D124)**: Implemented. `cache.zig` serializes predecoded IR
+(`PreInstr` + `pool64`) to `~/.cache/zwasm/<hash>.zwcache`.
+CLI: `zwasm run --cache` (auto-load/save), `zwasm compile` (AOT predecode).
+Mac Commit Gate passed: spec 62,263, E2E 792/792, real-world 30/30.
 
-Save predecoded/RegIR to disk. cache.zig, `zwasm run --cache`, `zwasm compile`.
-Decision: D124. Expected: 10-100x startup improvement.
+**Next**: Merge Gate (Mac + Ubuntu), then v1.3.0 release.
+After that: Phase 3 (CI Automation + Documentation).
 
 Previous: v1.2.0 released (tagged 5d54ae9, CW updated).
 
