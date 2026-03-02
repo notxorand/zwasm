@@ -1,13 +1,13 @@
-// Fuzz harness for the wasm module loader.
-//
-// Reads wasm bytes from stdin and attempts to decode, instantiate,
-// and invoke exported functions. Any error is expected (invalid wasm);
-// a panic/crash is a real bug.
-//
-// Usage:
-//   echo -n '<bytes>' | ./zig-out/bin/fuzz_loader
-//   head -c 100 /dev/urandom | wasm-tools smith | ./zig-out/bin/fuzz_loader
-//   AFL: afl-fuzz -i corpus/ -o findings/ -- ./zig-out/bin/fuzz_loader
+//! Fuzz harness for the wasm module loader.
+//!
+//! Reads wasm bytes from stdin and attempts to decode, instantiate,
+//! and invoke exported functions. Any error is expected (invalid wasm);
+//! a panic/crash is a real bug.
+//!
+//! Usage:
+//!   echo -n '<bytes>' | ./zig-out/bin/fuzz_loader
+//!   head -c 100 /dev/urandom | wasm-tools smith | ./zig-out/bin/fuzz_loader
+//!   AFL: afl-fuzz -i corpus/ -o findings/ -- ./zig-out/bin/fuzz_loader
 
 const std = @import("std");
 const zwasm = @import("zwasm");

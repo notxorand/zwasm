@@ -13,10 +13,18 @@ Session handover document. Read at session start.
 
 ## Current Task
 
-v1.3.0 released. CW updated to v1.3.0.
+Phase 3 (CI Automation + Documentation) complete on `phase3/ci-docs`.
+
+**Done**:
+- CI: centralized tool-versions, spec-bump, wasm-tools-bump, spectec-monitor workflows
+- Nightly re-enabled as weekly
+- D125 decision, proposal-watch.md
+- ARCHITECTURE.md, docs/data-structures.md
+- Doc comments on fuzz files, affected-file refs on all D## entries
 
 **Next steps**:
-1. Phase 3: CI Automation + Documentation (see `roadmap.md`)
+1. Merge `phase3/ci-docs` to main (after Merge Gate)
+2. Phase 5: C API + Conditional Compilation (see `roadmap.md`)
 
 ## Known Bugs
 

@@ -1,9 +1,9 @@
 name: Nightly
 
 on:
-  # schedule:
-  #   - cron: '0 3 * * *'  # 03:00 UTC daily (disabled to save CI minutes)
-  workflow_dispatch:       # manual trigger only
+  schedule:
+    - cron: '0 3 * * 3'  # Wednesday 03:00 UTC (weekly)
+  workflow_dispatch:
 
 jobs:
   sanitizer:
@@ -20,9 +20,8 @@ jobs:
         run: zig build test
 
       - name: Install wasm-tools
-        env:
-          WASM_TOOLS_VERSION: "1.245.1"
         run: |
+          source .github/tool-versions
           ARCH=$(uname -m)
           curl -L -o /tmp/wasm-tools.tar.gz \
             "https://github.com/bytecodealliance/wasm-tools/releases/download/v${WASM_TOOLS_VERSION}/wasm-tools-${WASM_TOOLS_VERSION}-${ARCH}-linux.tar.gz"
@@ -62,9 +61,8 @@ jobs:
           version: 0.15.2
 
       - name: Install wasm-tools
-        env:
-          WASM_TOOLS_VERSION: "1.245.1"
         run: |
+          source .github/tool-versions
           ARCH=$(uname -m)
           curl -L -o /tmp/wasm-tools.tar.gz \
             "https://github.com/bytecodealliance/wasm-tools/releases/download/v${WASM_TOOLS_VERSION}/wasm-tools-${WASM_TOOLS_VERSION}-${ARCH}-linux.tar.gz"

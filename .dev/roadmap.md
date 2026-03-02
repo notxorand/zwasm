@@ -39,23 +39,25 @@ cli.zig (signal handler install).
 
 **Gate**: PASSED. zwasm v1.3.0 candidate.
 
-### Phase 3: CI Automation + Documentation (2 days)
+### Phase 3: CI Automation + Documentation — COMPLETE
 
-**3.1 CI Automation (1 day)**
+**3.1 CI Automation**
 
-- Spec submodule auto-bump (weekly cron)
-- wasm-tools version auto-update (monthly cron)
-- SpecTec monitoring
-- `.dev/proposal-watch.md` (Phase 3-4 proposal watchlist)
+- `.github/tool-versions`: centralized WASM_TOOLS, WASMTIME, WASI_SDK versions
+- `spec-bump.yml`: weekly spec testsuite auto-bump (Monday 04:00 UTC)
+- `wasm-tools-bump.yml`: monthly wasm-tools version update (1st, 05:00 UTC)
+- `spectec-monitor.yml`: weekly SpecTec change detection (Monday 06:00 UTC)
+- `nightly.yml`: re-enabled as weekly (Wednesday 03:00 UTC)
+- D125 decision record, `.dev/proposal-watch.md`
 
-**3.2 Documentation (1 day)**
+**3.2 Documentation**
 
-- `ARCHITECTURE.md` (4-layer execution pipeline diagram + file mapping)
-- `///` doc comments on all source files
-- `docs/data-structures.md` (glossary)
-- decisions.md: add affected file references
+- `ARCHITECTURE.md`: pipeline diagram + 28-file map + test suites
+- `docs/data-structures.md`: key types by pipeline stage
+- `//!` doc comments on fuzz harness files
+- `Affected files:` references on all D100-D125 decisions
 
-**Gate**: CI cron working. ARCHITECTURE.md in place.
+**Gate**: PASSED.
 
 ### Phase 5: C API + Conditional Compilation (3 days)
 

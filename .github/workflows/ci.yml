@@ -39,9 +39,8 @@ jobs:
         run: zig build test
 
       - name: Install wasm-tools
-        env:
-          WASM_TOOLS_VERSION: "1.245.1"
         run: |
+          source .github/tool-versions
           ARCH=$(uname -m)
           [ "$ARCH" = "arm64" ] && ARCH="aarch64"
           OS=${{ runner.os == 'Linux' && '"linux"' || '"macos"' }}
@@ -116,9 +115,8 @@ jobs:
           echo "PASS: Within 4.5 MB limit"
 
       - name: Install wasmtime
-        env:
-          WASMTIME_VERSION: "42.0.1"
         run: |
+          source .github/tool-versions
           if [ "$(uname)" = "Darwin" ]; then
             ARCH="aarch64"; OS="macos"
           else
@@ -132,9 +130,8 @@ jobs:
           cp "/tmp/wasmtime-v${WASMTIME_VERSION}-${ARCH}-${OS}/wasmtime" "$HOME/.wasmtime/bin/"
 
       - name: Install WASI SDK
-        env:
-          WASI_SDK_VERSION: "25"
         run: |
+          source .github/tool-versions
           if [ "$(uname)" = "Darwin" ]; then
             ARCH="arm64"; OS="macos"
           else

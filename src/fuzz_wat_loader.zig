@@ -1,12 +1,12 @@
-// Fuzz harness for the WAT parser + module loader.
-//
-// Reads WAT text from stdin, converts to wasm, loads, and invokes
-// exported functions. Any error is expected (invalid WAT/wasm);
-// a panic/crash is a real bug.
-//
-// Usage:
-//   echo '(module)' | ./zig-out/bin/fuzz_wat_loader
-//   cat file.wat | ./zig-out/bin/fuzz_wat_loader
+//! Fuzz harness for the WAT parser + module loader.
+//!
+//! Reads WAT text from stdin, converts to wasm, loads, and invokes
+//! exported functions. Any error is expected (invalid WAT/wasm);
+//! a panic/crash is a real bug.
+//!
+//! Usage:
+//!   echo '(module)' | ./zig-out/bin/fuzz_wat_loader
+//!   cat file.wat | ./zig-out/bin/fuzz_wat_loader
 
 const std = @import("std");
 const zwasm = @import("zwasm");
