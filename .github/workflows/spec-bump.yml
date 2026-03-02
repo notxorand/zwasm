@@ -72,8 +72,14 @@ jobs:
           git checkout -b "$BRANCH"
           git add .github/spec-sha
           git commit -m "Bump spec testsuite to ${NEW_SHA}"
-          git push origin "$BRANCH"
-          gh pr create \
-            --title "Bump spec testsuite to ${NEW_SHA}" \
-            --body "Automated spec testsuite update. All tests pass." \
-            --base main
+          git push --force-with-lease origin "$BRANCH"
+          # Skip PR creation if one already exists for this branch
+          EXISTING=$(gh pr list --head "$BRANCH" --json number --jq '.[0].number' 2>/dev/null || echo "")
+          if [ -z "$EXISTING" ]; then
+            gh pr create \
+              --title "Bump spec testsuite to ${NEW_SHA}" \
+              --body "Automated spec testsuite update. All tests pass." \
+              --base main
+          else
+            echo "PR #$EXISTING already exists for $BRANCH"
+          fi

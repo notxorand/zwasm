@@ -74,8 +74,13 @@ jobs:
           git checkout -b "$BRANCH"
           git add .github/tool-versions
           git commit -m "Bump wasm-tools ${CURRENT} -> ${LATEST}"
-          git push origin "$BRANCH"
-          gh pr create \
-            --title "Bump wasm-tools to ${LATEST}" \
-            --body "Automated wasm-tools update from ${CURRENT} to ${LATEST}. All tests pass." \
-            --base main
+          git push --force-with-lease origin "$BRANCH"
+          EXISTING=$(gh pr list --head "$BRANCH" --json number --jq '.[0].number' 2>/dev/null || echo "")
+          if [ -z "$EXISTING" ]; then
+            gh pr create \
+              --title "Bump wasm-tools to ${LATEST}" \
+              --body "Automated wasm-tools update from ${CURRENT} to ${LATEST}. All tests pass." \
+              --base main
+          else
+            echo "PR #$EXISTING already exists for $BRANCH"
+          fi
