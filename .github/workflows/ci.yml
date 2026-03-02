@@ -156,6 +156,41 @@ jobs:
           export PATH="$HOME/.wasmtime/bin:$PATH"
           bash test/realworld/run_compat.sh
 
+  size-matrix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Zig
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.15.2
+
+      - name: Build size variants
+        run: |
+          echo "| Variant | Size (stripped) |"
+          echo "|---------|----------------|"
+
+          for variant in \
+            "full:" \
+            "no-jit:-Djit=false" \
+            "no-component:-Dcomponent=false" \
+            "no-wat:-Dwat=false" \
+            "minimal:-Djit=false -Dcomponent=false -Dwat=false"
+          do
+            NAME="${variant%%:*}"
+            FLAGS="${variant#*:}"
+            echo "Building $NAME ($FLAGS)..."
+            zig build -Doptimize=ReleaseSafe $FLAGS 2>&1
+            strip zig-out/bin/zwasm -o /tmp/zwasm_size
+            SIZE=$(wc -c < /tmp/zwasm_size | tr -d ' ')
+            SIZE_KB=$((SIZE / 1024))
+            echo "| $NAME | ${SIZE_KB} KB |"
+          done
+
+      - name: Verify minimal build tests pass
+        run: zig build test -Djit=false -Dcomponent=false -Dwat=false
+
   benchmark:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
