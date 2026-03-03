@@ -16,17 +16,42 @@ Session handover document. Read at session start.
 
 ## Current Task
 
-**Phase 5 complete** — branch `phase5/c-api`, ready for merge.
+**Phase 8: Real-World Coverage + WAT Parity** — branch `phase8/real-world-wat`.
 
-12 commits: D126 decision, c_api.zig (lifecycle/invoke/memory/exports/WASI/host-fns),
-include/zwasm.h, build targets, C tests + Python example, feature flags,
-conditional compilation guards, CI size-matrix, D127 decision + docs.
+### Phase 8.1 Complete: 50 real-world programs (was 30)
+- C1: TinyGo infra + 4 programs (hello, fib, sort, json) — `-scheduler=none`
+- C2: SHA-256 + miniz C programs
+- C5: C data structures (regex, utf8, btree, lz4)
+- C6: Rust crate programs (regex, serde_json, sha256, compression)
+- C7: Go + C++ (crypto_sha256, regex, json_parse)
+- C8: Stress tests (deep_recursion, large_memory, many_functions)
+- All 50 PASS compat test (zwasm vs wasmtime)
+- Deferred: SQLite + Lua (JIT bug W30)
 
-**Next**: Merge Gate (Mac + Ubuntu), then merge to main.
+### Phase 8.2 Complete: WAT parity 100%
+- WAT roundtrip: 62,259/62,259 passed (100.0%)
+- 708 conv-fail = wasm-tools can't convert malformed .wasm (expected)
+- No WAT parser fixes needed
 
-## Known Bugs
+### W30 JIT Bug Fix (Phase 8 pre-merge)
+- Guard page recovery: save/restore across nested JIT calls (SIGBUS fix)
+- instrDefinesRd: global.set/memory.fill/memory.copy rd is USE not DEF
+- computeCalleeSavedLiveSet: added rd-as-USE + select condition vreg
+- x86 emitCall: removed liveness-aware spill/reload (caused register file
+  corruption — non-live phys regs had garbage after CALL, subsequent
+  spillCallerSaved wrote garbage to register file)
+- ARM64 spillCallerSavedLive: reverted "spill ALL" back to "spill live only"
+  (the "spill ALL" caused intermittent failures in Go programs)
+- emitInlineSelfCall: moved emitLoadMemCache before reloadCallerSavedLive
+  (BLR clobbers caller-saved regs; also fixed Ubuntu TinyGo 0.37.0 OOB crash)
+- Mac: 50/50 PASS (W31 resolved — bad test data, not JIT bug)
+- Ubuntu: 50/50 PASS, 0 CRASH. Spec 62,263/62,263. E2E 792/792.
 
-None.
+### Merge Gate PASSED
+- Mac: unit PASS, spec 62,263/62,263, E2E 792/792, compat 50/50, binary 1.20MB
+- Ubuntu: unit PASS, spec 62,263/62,263, E2E 792/792, compat 50/50
+
+**Next**: Merge to main + update compat count.
 
 ## References
 

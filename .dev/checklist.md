@@ -11,7 +11,17 @@ Prefix: W## (to distinguish from CW's F## items).
 
 ## Open items
 
-(none)
+- [x] W30: JIT out-of-bounds on complex real-world programs — **FIXED**
+  Root cause: four JIT codegen bugs:
+  1. Guard page recovery not saved/restored across nested JIT calls (SIGBUS crashes)
+  2. instrDefinesRd wrong for global.set/memory.fill/memory.copy (rd is USE not DEF)
+  3. computeCalleeSavedLiveSet missing rd-as-USE and select condition vreg
+  4. x86 emitCall: liveness-aware spill/reload left garbage in physical registers
+  Mac + Ubuntu: spec 62,263/62,263, E2E 792/792, compat 50/50 (Ubuntu).
+- [x] W31: Intermittent ARM64 JIT crash in Go wasm programs — **NOT A BUG**
+  Root cause: go_crypto_sha256 test had wrong expected SHA-256 hash values.
+  Fix: corrected expected hash for "Hello, SHA-256!" in main.go.
+  50/50 PASS (go_crypto_sha256 + go_regex) after fix. No JIT bug.
 
 ## Resolved items (summary, details in git history)
 

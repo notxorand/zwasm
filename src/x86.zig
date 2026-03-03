@@ -1205,8 +1205,6 @@ pub const Compiler = struct {
     min_memory_bytes: u32,
     known_consts: [128]?u32,
     written_vregs: u128,
-    /// Live vreg bitmap at current call site.
-    call_live_set: u32,
     scratch_vreg: ?u16,
     /// True when the memory has guard pages — skip explicit bounds checks.
     use_guard_pages: bool,
@@ -1265,7 +1263,6 @@ pub const Compiler = struct {
             .min_memory_bytes = 0,
             .known_consts = .{null} ** 128,
             .written_vregs = 0,
-            .call_live_set = 0,
             .scratch_vreg = null,
             .use_guard_pages = false,
             .shared_exit_offset = 0,
@@ -1326,11 +1323,10 @@ pub const Compiler = struct {
         if (max <= FIRST_CALLER_SAVED_VREG) return;
         for (FIRST_CALLER_SAVED_VREG..max) |i| {
             const vreg: u16 = @intCast(i);
-            if (self.written_vregs & (@as(u128, 1) << @as(u7, @intCast(vreg))) != 0) {
-                if (vregToPhys(vreg)) |phys| {
-                    const disp: i32 = @as(i32, vreg) * 8;
-                    Enc.storeDisp32(&self.code, self.alloc, REGS_PTR, disp, phys);
-                }
+            if (self.written_vregs & (@as(u128, 1) << @as(u7, @intCast(vreg))) == 0) continue;
+            if (vregToPhys(vreg)) |phys| {
+                const disp: i32 = @as(i32, vreg) * 8;
+                Enc.storeDisp32(&self.code, self.alloc, REGS_PTR, disp, phys);
             }
         }
     }
@@ -1341,38 +1337,6 @@ pub const Compiler = struct {
         if (max <= FIRST_CALLER_SAVED_VREG) return;
         for (FIRST_CALLER_SAVED_VREG..max) |i| {
             const vreg: u16 = @intCast(i);
-            if (vregToPhys(vreg)) |phys| {
-                const disp: i32 = @as(i32, vreg) * 8;
-                Enc.loadDisp32(&self.code, self.alloc, phys, REGS_PTR, disp);
-            }
-        }
-    }
-
-    /// Spill only caller-saved vregs that are live after the call.
-    fn spillCallerSavedLive(self: *Compiler, ir: []const RegInstr, call_pc: u32) void {
-        const max = @min(self.reg_count, MAX_PHYS_REGS);
-        if (max <= FIRST_CALLER_SAVED_VREG) return;
-        const live_set = computeCallLiveSet(ir, call_pc);
-        self.call_live_set = live_set;
-        for (FIRST_CALLER_SAVED_VREG..max) |i| {
-            const vreg: u16 = @intCast(i);
-            if (self.written_vregs & (@as(u128, 1) << @as(u7, @intCast(vreg))) == 0) continue;
-            if ((live_set & (@as(u32, 1) << @as(u5, @intCast(vreg)))) == 0) continue;
-            if (vregToPhys(vreg)) |phys| {
-                const disp: i32 = @as(i32, vreg) * 8;
-                Enc.storeDisp32(&self.code, self.alloc, REGS_PTR, disp, phys);
-            }
-        }
-    }
-
-    /// Reload only caller-saved vregs that were spilled as live.
-    fn reloadCallerSavedLive(self: *Compiler) void {
-        const max = @min(self.reg_count, MAX_PHYS_REGS);
-        if (max <= FIRST_CALLER_SAVED_VREG) return;
-        const live_set = self.call_live_set;
-        for (FIRST_CALLER_SAVED_VREG..max) |i| {
-            const vreg: u16 = @intCast(i);
-            if ((live_set & (@as(u32, 1) << @as(u5, @intCast(vreg)))) == 0) continue;
             if (vregToPhys(vreg)) |phys| {
                 const disp: i32 = @as(i32, vreg) * 8;
                 Enc.loadDisp32(&self.code, self.alloc, phys, REGS_PTR, disp);
@@ -1825,12 +1789,11 @@ pub const Compiler = struct {
     // --- Call emitters ---
 
     /// Emit a function call via trampoline.
-    fn emitCall(self: *Compiler, rd: u16, func_idx: u32, n_args: u16, data: RegInstr, data2: ?RegInstr, ir: []const RegInstr, call_pc: u32) void {
-        // 1. Spill caller-saved regs + arg vregs
-        self.spillCallerSavedLive(ir, call_pc);
+    fn emitCall(self: *Compiler, rd: u16, func_idx: u32, n_args: u16, data: RegInstr, data2: ?RegInstr, _: []const RegInstr, _: u32) void {
+        // 1. Spill ALL caller-saved regs (non-live-aware: avoids stale physical
+        // registers after reload, preventing corruption by subsequent spillCallerSaved).
+        self.spillCallerSaved();
         // Trampoline reads args from regs[] — spill ALL arg vregs unconditionally.
-        // spillCallerSavedLive only spills live-after-call vregs, but call args may be
-        // dead after the call yet still needed by the trampoline to pass to the callee.
         if (n_args > 0) self.spillVreg(data.rd);
         if (n_args > 1) self.spillVreg(data.rs1);
         if (n_args > 2) self.spillVreg(data.rs2_field);
@@ -1890,8 +1853,8 @@ pub const Compiler = struct {
             self.emitLoadMemCache();
         }
 
-        // 7. Reload caller-saved regs, then load result
-        self.reloadCallerSavedLive();
+        // 7. Reload ALL caller-saved regs, then load result
+        self.reloadCallerSaved();
         self.reloadVreg(rd);
     }
 
@@ -1965,13 +1928,13 @@ pub const Compiler = struct {
 
     /// Emit inline self-call: bypass trampoline, call directly to self_call_entry.
     /// Handles: spill, reg_ptr advance, arg copy, call_depth, CALL, restore.
-    fn emitInlineSelfCall(self: *Compiler, rd: u16, data: RegInstr, data2: ?RegInstr, ir: []const RegInstr, call_pc: u32) void {
+    fn emitInlineSelfCall(self: *Compiler, rd: u16, data: RegInstr, data2: ?RegInstr, _: []const RegInstr, _: u32) void {
         const needed: u32 = @as(u32, self.reg_count) + 4; // +4: mem cache + VM/inst ptrs
         const needed_bytes: u32 = needed * 8;
         const n_args = self.param_count;
 
-        // 1. Spill ALL live vregs (including callee-saved vregs 0-2)
-        self.spillCallerSavedLive(ir, call_pc);
+        // 1. Spill ALL caller-saved vregs (including callee-saved vregs 0-2)
+        self.spillCallerSaved();
         // Spill callee-saved vregs — self-call entry doesn't save/restore them.
         for (0..@min(self.reg_count, FIRST_CALLER_SAVED_VREG)) |i| {
             self.spillVreg(@intCast(i));
@@ -2095,7 +2058,7 @@ pub const Compiler = struct {
         }
 
         // 15. Reload ALL vregs (including callee-saved 0-2)
-        self.reloadCallerSavedLive();
+        self.reloadCallerSaved();
         // Reload callee-saved vregs (0-2) that were spilled in step 1
         for (0..@min(self.reg_count, FIRST_CALLER_SAVED_VREG)) |i| {
             self.reloadVreg(@intCast(i));

@@ -3465,7 +3465,8 @@ pub const Vm = struct {
 
         const regs_ptr = self.reg_stack[base..].ptr;
 
-        // Set guard page recovery point
+        // Save/restore guard page recovery across nested JIT calls
+        const saved_recovery = guard_mod.getRecovery().*;
         if (jc.oob_exit_offset != 0) {
             const buf_start = @intFromPtr(jc.buf.ptr);
             guard_mod.setRecovery(.{
@@ -3479,7 +3480,8 @@ pub const Vm = struct {
         // Call OSR entry: sets up callee-saved, memory cache, then jumps to loop body
         const err_code = osr_fn(regs_ptr, @ptrCast(self), @ptrCast(instance));
 
-        guard_mod.clearRecovery();
+        // Restore caller's recovery context
+        guard_mod.setRecovery(saved_recovery);
 
         if (err_code != 0) {
             return switch (err_code) {
@@ -3522,7 +3524,11 @@ pub const Vm = struct {
         for (args, 0..) |arg, i| regs[i] = arg;
         for (args.len..reg.local_count) |i| regs[i] = 0;
 
-        // Set guard page recovery point before entering JIT code
+        // Save/restore guard page recovery across nested JIT calls.
+        // When JIT A calls trampoline → callFunction → executeJIT(B),
+        // B's recovery must not clobber A's — otherwise A's subsequent
+        // memory accesses would crash instead of trapping.
+        const saved_recovery = guard_mod.getRecovery().*;
         if (jc.oob_exit_offset != 0) {
             const buf_start = @intFromPtr(jc.buf.ptr);
             guard_mod.setRecovery(.{
@@ -3536,8 +3542,8 @@ pub const Vm = struct {
         // Call JIT-compiled function
         const err_code = jc.entry(regs.ptr, @ptrCast(self), @ptrCast(instance));
 
-        // Clear recovery point after JIT code returns
-        guard_mod.clearRecovery();
+        // Restore caller's recovery context (not just clear)
+        guard_mod.setRecovery(saved_recovery);
 
         if (err_code != 0) {
             return switch (err_code) {

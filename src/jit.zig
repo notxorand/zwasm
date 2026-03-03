@@ -1441,14 +1441,17 @@ pub const Compiler = struct {
             // Memory stores use rd as VALUE source, not a definition
             0x36, 0x37, 0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E,
             => false,
+            // global.set: rd = value to write (a use, not a definition)
+            0x24 => false,
+            // memory.fill/copy: rd = destination address (a use, not a definition)
+            regalloc_mod.OP_MEMORY_FILL, regalloc_mod.OP_MEMORY_COPY => false,
             // GC struct.set: rd = ref_reg (a use, not a definition)
             predecode_mod.GC_BASE | 0x05 => false,
             else => true,
         };
     }
 
-    /// Spill only caller-saved vregs that are live after the call.
-    /// call_pc: the PC of the OP_CALL instruction in the IR.
+    /// Spill caller-saved vregs that are live after the call.
     fn spillCallerSavedLive(self: *Compiler, ir: []const RegInstr, call_pc: u32) void {
         const max: u8 = @intCast(@min(self.reg_count, MAX_PHYS_REGS));
         if (max <= 5) return;
@@ -1457,9 +1460,8 @@ pub const Compiler = struct {
         for (5..max) |i| {
             const vreg: u16 = @intCast(i);
             if (vreg == 12 or vreg == 13) continue;
-            if (vreg < 128 and (self.written_vregs & (@as(u128, 1) << @as(u7, @intCast(vreg)))) == 0) continue;
-            // Only spill if vreg is live after the call
             if ((live_set & (@as(u32, 1) << @as(u5, @intCast(vreg)))) == 0) continue;
+            if (vreg < 128 and (self.written_vregs & (@as(u128, 1) << @as(u7, @intCast(vreg)))) == 0) continue;
             if (vregToPhys(vreg)) |phys| {
                 self.emit(a64.str64(phys, REGS_PTR, @as(u16, vreg) * 8));
             }
@@ -1540,17 +1542,31 @@ pub const Compiler = struct {
                 continue;
             }
 
-            if (instr.op != regalloc_mod.OP_CALL) {
+            if (instr.op != regalloc_mod.OP_CALL and
+                instr.op != (predecode_mod.GC_BASE | 0x00))
+            {
                 self.markCalleeSavedUse(&live, &resolved, instr.rs1);
             }
             if (instrHasRs2(instr)) {
                 self.markCalleeSavedUse(&live, &resolved, instr.rs2());
+            }
+            // select: condition register stored in operand
+            if (instr.op == 0x1B) {
+                const cond_vreg: u16 = @truncate(instr.operand);
+                self.markCalleeSavedUse(&live, &resolved, cond_vreg);
             }
 
             if (instrDefinesRd(instr)) {
                 if (self.isCalleeSavedVreg(instr.rd)) {
                     resolved |= @as(u32, 1) << @as(u5, @intCast(instr.rd));
                 }
+            } else if (instr.op != regalloc_mod.OP_NOP and
+                instr.op != regalloc_mod.OP_DELETED and
+                instr.op != regalloc_mod.OP_BLOCK_END and
+                instr.op != regalloc_mod.OP_BR)
+            {
+                // rd is a USE (not a define) for: return, stores, br_if, br_table, global.set
+                self.markCalleeSavedUse(&live, &resolved, instr.rd);
             }
 
             // Backward branches: conservatively mark unresolved callee-saved vregs as live
@@ -4119,34 +4135,34 @@ pub const Compiler = struct {
         // 10b. Reload callee-saved vregs from regs[] (caller saved them before BL).
         self.reloadCalleeSavedLive();
 
-        // 11-12. Copy result and reload caller-saved regs.
-        //     For callee-saved rd: load result directly into physical reg after callee reload.
-        //     For caller-saved rd: reload others first, then load result directly.
-        //     For memory-backed rd: store to memory (no physical reg).
+        // 11-13. Reload memory cache, result, and caller-saved regs.
+        //     emitLoadMemCache calls jitGetMemInfo via BLR which clobbers all caller-saved
+        //     registers (x0-x7, x9-x15). Must reload memory cache BEFORE caller-saved regs,
+        //     matching the same ordering as emitCall (step 5a there).
         const rd_phys = if (self.result_count > 0) vregToPhys(rd) else null;
         const rd_callee_saved = if (rd_phys) |p| (p >= 19 and p <= 28) else false;
 
+        // 11a. Callee-saved result: load before BLR (survives BLR since callee-saved).
         if (self.result_count > 0 and rd_callee_saved) {
-            // Callee-saved: load result (overwrites the just-reloaded pre-call value)
             self.emitLoadCalleeResult(rd_phys.?, needed_bytes);
         }
 
+        // 12. Reload memory cache BEFORE caller-saved regs (BLR clobbers x0-x15).
+        if (self.has_memory) {
+            self.emitLoadMemCache();
+        }
+
+        // 13. Reload caller-saved regs AFTER all BLRs, then caller-saved result last.
         self.reloadCallerSavedLiveExcept(if (rd_phys != null and !rd_callee_saved) rd else null);
 
         if (self.result_count > 0 and !rd_callee_saved) {
             if (rd_phys) |phys| {
-                // Caller-saved: load directly after reload (skipped in reload above)
                 self.emitLoadCalleeResult(phys, needed_bytes);
             } else {
                 // Memory-backed: must go through SCRATCH → memory
                 self.emitLoadCalleeResult(SCRATCH, needed_bytes);
                 self.emit(a64.str64(SCRATCH, REGS_PTR, @as(u16, rd) * 8));
             }
-        }
-
-        // 13. Reload memory cache (memory may have grown during call)
-        if (self.has_memory) {
-            self.emitLoadMemCache();
         }
     }
 
@@ -4816,7 +4832,24 @@ pub fn jitCallTrampoline(
                 for (call_args[0..n_args], 0..) |arg, i| callee_regs[i] = arg;
                 for (n_args..reg.local_count) |i| callee_regs[i] = 0;
 
+                // Save/restore guard page recovery: callee's recovery must not
+                // clobber caller's — otherwise caller crashes on guard page faults
+                // after this trampoline returns.
+                const guard_mod = @import("guard.zig");
+                const saved_recovery = guard_mod.getRecovery().*;
+                if (jc.oob_exit_offset != 0) {
+                    const buf_start = @intFromPtr(jc.buf.ptr);
+                    guard_mod.setRecovery(.{
+                        .oob_exit_pc = buf_start + jc.oob_exit_offset,
+                        .jit_code_start = buf_start,
+                        .jit_code_end = buf_start + jc.code_len,
+                        .active = true,
+                    });
+                }
+
                 const err = jc.entry(callee_regs.ptr, vm_opaque, instance_opaque);
+
+                guard_mod.setRecovery(saved_recovery);
                 vm.reg_ptr = base;
                 vm.call_depth -= 1;
                 if (err != 0) return err;
@@ -4899,7 +4932,22 @@ pub fn jitCallIndirectTrampoline(
                 for (call_args[0..n_args], 0..) |arg, i| callee_regs[i] = arg;
                 for (n_args..reg.local_count) |i| callee_regs[i] = 0;
 
+                // Save/restore guard page recovery for nested JIT calls
+                const guard_mod = @import("guard.zig");
+                const saved_recovery = guard_mod.getRecovery().*;
+                if (jc.oob_exit_offset != 0) {
+                    const buf_start = @intFromPtr(jc.buf.ptr);
+                    guard_mod.setRecovery(.{
+                        .oob_exit_pc = buf_start + jc.oob_exit_offset,
+                        .jit_code_start = buf_start,
+                        .jit_code_end = buf_start + jc.code_len,
+                        .active = true,
+                    });
+                }
+
                 const err = jc.entry(callee_regs.ptr, vm_opaque, instance_opaque);
+
+                guard_mod.setRecovery(saved_recovery);
                 vm.reg_ptr = base;
                 if (err != 0) return err;
 
