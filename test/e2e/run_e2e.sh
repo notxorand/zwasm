@@ -53,7 +53,7 @@ fi
 RUNNER="./zig-out/bin/e2e_runner"
 if [ ! -f "$RUNNER" ]; then
     echo "Building e2e_runner..."
-    zig build
+    zig build e2e
 fi
 
 # Run tests using Zig E2E runner

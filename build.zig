@@ -55,7 +55,10 @@ pub fn build(b: *std.Build) void {
     cli.stack_size = 64 * 1024 * 1024; // 64MB
     b.installArtifact(cli);
 
-    // Example executables
+    // Example executables — only built via "examples" step (not default install)
+    // to keep default artifact count low and avoid Zig 0.15.2 build runner
+    // shuffle bug on some platforms (crashes with >=8 default install artifacts).
+    const examples_step = b.step("examples", "Build example executables");
     const examples = [_]struct { name: []const u8, src: []const u8 }{
         .{ .name = "example_basic", .src = "examples/zig/basic.zig" },
         .{ .name = "example_memory", .src = "examples/zig/memory.zig" },
@@ -74,34 +77,40 @@ pub fn build(b: *std.Build) void {
             .name = ex.name,
             .root_module = ex_mod,
         });
-        b.installArtifact(ex_exe);
+        examples_step.dependOn(&b.addInstallArtifact(ex_exe, .{}).step);
     }
 
-    // E2E test runner executable
-    const e2e_mod = b.createModule(.{
-        .root_source_file = b.path("test/e2e/e2e_runner.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    e2e_mod.addImport("zwasm", mod);
-    const e2e = b.addExecutable(.{
-        .name = "e2e_runner",
-        .root_module = e2e_mod,
-    });
-    b.installArtifact(e2e);
+    // E2E test runner executable — only built via "e2e" step
+    const e2e_step = b.step("e2e", "Build E2E test runner");
+    {
+        const e2e_mod = b.createModule(.{
+            .root_source_file = b.path("test/e2e/e2e_runner.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        e2e_mod.addImport("zwasm", mod);
+        const e2e = b.addExecutable(.{
+            .name = "e2e_runner",
+            .root_module = e2e_mod,
+        });
+        e2e_step.dependOn(&b.addInstallArtifact(e2e, .{}).step);
+    }
 
-    // Benchmark executable
-    const bench_mod = b.createModule(.{
-        .root_source_file = b.path("bench/fib_bench.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    bench_mod.addImport("zwasm", mod);
-    const bench = b.addExecutable(.{
-        .name = "fib_bench",
-        .root_module = bench_mod,
-    });
-    b.installArtifact(bench);
+    // Benchmark executable — only built via "bench" step
+    const bench_step = b.step("bench", "Build benchmark executable");
+    {
+        const bench_mod = b.createModule(.{
+            .root_source_file = b.path("bench/fib_bench.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        bench_mod.addImport("zwasm", mod);
+        const bench = b.addExecutable(.{
+            .name = "fib_bench",
+            .root_module = bench_mod,
+        });
+        bench_step.dependOn(&b.addInstallArtifact(bench, .{}).step);
+    }
 
     // Fuzz loader executables — only built via "fuzz" step (not default install)
     // to keep default artifact count low and avoid Zig 0.15.2 build runner
