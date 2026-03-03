@@ -84,24 +84,22 @@ cli.zig (signal handler install).
 
 **Gate**: PASSED.
 
-### Phase 8: Real-World Coverage + WAT Parity (3 days)
+### Phase 8: Real-World Coverage + WAT Parity — COMPLETE
 
-**8.1 Real-World Coverage Expansion (2 days)**
+**8.1 Real-World Coverage: 50 programs**
 
-- High-priority targets: SQLite, Lua WASI, PHP WASI
-- Toolchain tests: Emscripten, AssemblyScript, TinyGo
-- WasmBench evaluation (WASI-compatible module batch execution)
-- Stress tests (large functions, deep recursion, large memory)
-- Compatibility metric (target 95%+, 50+ programs)
+- TinyGo (4), C (9), C++ (1), Go (2), Rust (4) + existing (30) = 50
+- Stress tests: deep recursion, large memory, many functions
+- W30 JIT bug: five codegen fixes (guard recovery, instrDefinesRd,
+  callee-saved liveness, x86 emitCall, emitInlineSelfCall ordering)
+- Deferred: SQLite + Lua (complex wasm, future work)
 
-**8.2 WAT Spec Parity (1 day)**
+**8.2 WAT Spec Parity: 100%**
 
-- WAT roundtrip audit script
-- Gap triage → categorical fixes
-- Input validation hardening
-- GC type annotation support
+- WAT roundtrip: 62,259/62,259 (100%)
+- 708 conv-fail = wasm-tools can't convert malformed .wasm (expected)
 
-**Gate**: real-world 50+ / WAT roundtrip rate 100% (where feasible).
+**Gate**: PASSED. Mac + Ubuntu compat 50/50, spec 62,263/62,263, E2E 792/792.
 
 ### Phase 10: Quality / Stabilization (zwasm portion, 1 day)
 
