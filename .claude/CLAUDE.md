@@ -87,7 +87,7 @@ When in doubt, **continue**.
    (Required when modifying vm.zig, predecode.zig, regalloc.zig, opcode.zig, module.zig, wasi.zig, validate.zig)
 3. **E2E tests**: `bash test/e2e/run_e2e.sh --convert --summary` — fail=0, leak=0
    (Required when modifying interpreter/opcodes)
-4. **Real-world compat**: `bash test/realworld/run_compat.sh` — PASS=30, FAIL=0, CRASH=0
+4. **Real-world compat**: `bash test/realworld/run_compat.sh` — PASS=50, FAIL=0, CRASH=0
    (Required when modifying vm/wasi/JIT)
 5. **Benchmarks**: Required for optimization/JIT tasks.
    - Quick check: `bash bench/run_bench.sh --quick`
@@ -101,7 +101,7 @@ When in doubt, **continue**.
 - `zig build test` — all pass, 0 fail, 0 leak
 - `python3 test/spec/run_spec.py --build --summary` — fail=0, skip=0
 - `bash test/e2e/run_e2e.sh --convert --summary` — fail=0, leak=0
-- `bash test/realworld/run_compat.sh` — PASS=30, FAIL=0, CRASH=0
+- `bash test/realworld/run_compat.sh` — PASS=50, FAIL=0, CRASH=0
 - Benchmarks pass (no regression)
 Fix root cause before merging if Ubuntu reveals new failures.
 

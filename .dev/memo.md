@@ -16,17 +16,29 @@ Session handover document. Read at session start.
 
 ## Current Task
 
-**Phase 5 complete** — branch `phase5/c-api`, ready for merge.
+**Phase 8: Real-World Coverage + WAT Parity** — branch `phase8/real-world-wat`.
 
-12 commits: D126 decision, c_api.zig (lifecycle/invoke/memory/exports/WASI/host-fns),
-include/zwasm.h, build targets, C tests + Python example, feature flags,
-conditional compilation guards, CI size-matrix, D127 decision + docs.
+### Phase 8.1 Complete: 50 real-world programs (was 30)
+- C1: TinyGo infra + 4 programs (hello, fib, sort, json) — `-scheduler=none`
+- C2: SHA-256 + miniz C programs
+- C5: C data structures (regex, utf8, btree, lz4)
+- C6: Rust crate programs (regex, serde_json, sha256, compression)
+- C7: Go + C++ (crypto_sha256, regex, json_parse)
+- C8: Stress tests (deep_recursion, large_memory, many_functions)
+- All 50 PASS compat test (zwasm vs wasmtime)
+- Deferred: SQLite + Lua (JIT bug W30)
 
-**Next**: Merge Gate (Mac + Ubuntu), then merge to main.
+### Phase 8.2 Complete: WAT parity 100%
+- WAT roundtrip: 62,259/62,259 passed (100.0%)
+- 708 conv-fail = wasm-tools can't convert malformed .wasm (expected)
+- No WAT parser fixes needed
+
+**Next**: Merge Gate (Mac + Ubuntu), then merge to main + update compat count.
 
 ## Known Bugs
 
-None.
+- W30: JIT out-of-bounds on complex programs (regex-lite, SQLite, TinyGo heavy dispatch).
+  Works in interpreter mode. Tracked in checklist.md.
 
 ## References
 
