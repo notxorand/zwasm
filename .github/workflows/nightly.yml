@@ -74,6 +74,10 @@ jobs:
           bash test/fuzz/gen_corpus.sh 100
           bash test/fuzz/gen_edge_cases.sh
 
-      - name: Fuzz campaign (60 min)
+      - name: Wasm fuzz campaign (60 min)
         run: bash test/fuzz/fuzz_campaign.sh --duration=60 --no-coverage
         timeout-minutes: 75
+
+      - name: WAT fuzz campaign (30 min)
+        run: bash test/fuzz/fuzz_wat_campaign.sh --duration=30
+        timeout-minutes: 45
