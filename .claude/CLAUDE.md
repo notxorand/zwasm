@@ -145,11 +145,19 @@ Results: `.dev/fuzz-overnight-result.txt`, `.dev/fuzz-overnight-wat-result.txt`.
 
 ### Harnesses (Zig)
 
-| File                  | Purpose                                          |
-|-----------------------|--------------------------------------------------|
-| `src/fuzz_loader.zig` | Stdin wasm → decode + instantiate + invoke        |
-| `src/fuzz_wat_loader.zig` | Stdin WAT → parse + encode + load + invoke    |
-| `src/fuzz_gen.zig`    | Structure-aware generators + phase-separate tests |
+| File                      | Purpose                                                              |
+|---------------------------|----------------------------------------------------------------------|
+| `src/fuzz_loader.zig`     | Stdin wasm → WASI fallback + parameterized invoke + JIT trigger (11x) |
+| `src/fuzz_wat_loader.zig` | Stdin WAT → parse + encode + parameterized invoke + JIT trigger (11x)  |
+| `src/fuzz_gen.zig`        | Structure-aware generators + phase-separate tests                     |
+
+Harness features: WASI sandbox fallback (all caps denied), parameterized function invoke
+(up to 8 args synthesized from input bytes), multi-value returns (up to 8), JIT compilation
+trigger (calls each function HOT_THRESHOLD+1 times).
+
+Generators in `fuzz_gen.zig`: deep nesting, many locals, unreachable code, many types/functions,
+br_table, memory boundary, if/else chains, call_indirect, bulk memory, multi-value, tail call,
+SIMD basic, GC struct, GC array, exception handling, typed select.
 
 Phase-separate fuzz tests in `fuzz_gen.zig` (run via `zig build test`):
 decoder, validator, predecode, regalloc — each tested independently with `std.testing.fuzz`.
