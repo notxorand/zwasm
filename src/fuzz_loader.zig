@@ -4,6 +4,12 @@
 //! and invoke exported functions. Any error is expected (invalid wasm);
 //! a panic/crash is a real bug.
 //!
+//! Features:
+//! - WASI fallback: tries non-WASI first, then WASI with sandbox caps
+//! - Parameterized invoke: synthesizes args from input bytes (up to 8 params)
+//! - Multi-value returns: handles up to 8 result values
+//! - JIT trigger: calls each function 11 times (HOT_THRESHOLD+1)
+//!
 //! Usage:
 //!   echo -n '<bytes>' | ./zig-out/bin/fuzz_loader
 //!   head -c 100 /dev/urandom | wasm-tools smith | ./zig-out/bin/fuzz_loader
@@ -13,6 +19,9 @@ const std = @import("std");
 const zwasm = @import("zwasm");
 
 const FUEL_LIMIT: u64 = 1_000_000;
+const JIT_CALLS: u32 = 11; // HOT_THRESHOLD(10) + 1
+const MAX_ARGS: usize = 8;
+const MAX_RESULTS: usize = 8;
 
 pub fn main() void {
     var gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
@@ -28,18 +37,49 @@ pub fn main() void {
     fuzzOne(allocator, input);
 }
 
+fn loadModule(allocator: std.mem.Allocator, input: []const u8) ?*zwasm.WasmModule {
+    // Try non-WASI first (fuel-bounded start function)
+    if (zwasm.WasmModule.loadWithFuel(allocator, input, FUEL_LIMIT)) |m| {
+        return m;
+    } else |_| {}
+
+    // Fallback: WASI with sandbox caps (all denied, safe for fuzzing).
+    // Exercises WASI import resolution + host function dispatch.
+    const m = zwasm.WasmModule.loadWasiWithOptions(allocator, input, .{
+        .caps = zwasm.Capabilities.sandbox,
+    }) catch return null;
+    m.vm.fuel = FUEL_LIMIT;
+    return m;
+}
+
 fn fuzzOne(allocator: std.mem.Allocator, input: []const u8) void {
-    // Load with fuel limit to prevent infinite loops in start functions
-    const module = zwasm.WasmModule.loadWithFuel(allocator, input, FUEL_LIMIT) catch return;
+    const module = loadModule(allocator, input) orelse return;
     defer module.deinit();
 
-    // Invoke zero-arg exported functions to exercise the interpreter
+    // Use input bytes as deterministic arg source
+    var arg_pos: usize = 0;
+
     for (module.export_fns) |ei| {
-        if (ei.param_types.len == 0 and ei.result_types.len <= 1) {
-            var results: [1]u64 = .{0};
-            const result_slice = results[0..ei.result_types.len];
-            module.invoke(ei.name, &.{}, result_slice) catch continue;
-            // Reset fuel for next function
+        const nparams = ei.param_types.len;
+        const nresults = ei.result_types.len;
+        if (nparams > MAX_ARGS or nresults > MAX_RESULTS) continue;
+
+        // Synthesize args from input bytes
+        var args: [MAX_ARGS]u64 = .{0} ** MAX_ARGS;
+        for (0..nparams) |i| {
+            if (arg_pos + 8 <= input.len) {
+                args[i] = std.mem.readInt(u64, input[arg_pos..][0..8], .little);
+                arg_pos += 8;
+            }
+        }
+        const arg_slice = args[0..nparams];
+
+        var results: [MAX_RESULTS]u64 = .{0} ** MAX_RESULTS;
+        const result_slice = results[0..nresults];
+
+        // Call multiple times to trigger JIT compilation
+        for (0..JIT_CALLS) |_| {
+            module.invoke(ei.name, arg_slice, result_slice) catch break;
             module.vm.fuel = FUEL_LIMIT;
         }
     }
