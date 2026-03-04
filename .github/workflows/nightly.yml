@@ -69,6 +69,11 @@ jobs:
           tar xzf /tmp/wasm-tools.tar.gz -C /tmp
           echo "/tmp/wasm-tools-${WASM_TOOLS_VERSION}-${ARCH}-linux" >> "$GITHUB_PATH"
 
+      - name: Generate fuzz corpus
+        run: |
+          bash test/fuzz/gen_corpus.sh 100
+          bash test/fuzz/gen_edge_cases.sh
+
       - name: Fuzz campaign (60 min)
         run: bash test/fuzz/fuzz_campaign.sh --duration=60 --no-coverage
         timeout-minutes: 75

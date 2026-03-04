@@ -113,6 +113,52 @@ zig build test -- "X"              # Specific test only
 ./zig-out/bin/zwasm run file.wasm  # Run wasm module
 ```
 
+## Fuzzing
+
+Fuzzing infrastructure in `test/fuzz/`. Corpus files (`.wasm`/`.wat`) are gitignored — generate locally.
+
+### Corpus
+
+```bash
+bash test/fuzz/gen_corpus.sh       # Generate ~1800 wasm modules (9 categories via wasm-tools smith)
+bash test/fuzz/gen_edge_cases.sh   # Hand-crafted edge cases (truncated, bad magic, oversized LEB, etc.)
+```
+
+Categories: mvp, simd, gc, eh, threads, mem64, tailcall, all (kitchen sink), invalid (malformed bodies).
+
+### Running
+
+```bash
+bash test/fuzz/run_corpus.sh --build           # Quick corpus test (~1800 modules)
+bash test/fuzz/fuzz_campaign.sh --duration=30   # Full campaign: corpus + fresh gen + mutation (30 min)
+bash test/fuzz/fuzz_wat_campaign.sh --duration=30  # WAT-specific campaign: parse + mutation (30 min)
+```
+
+Overnight (snapshot binary, runs in background):
+```bash
+nohup bash test/fuzz/fuzz_overnight.sh --duration=660 > /dev/null 2>&1 &     # wasm, ~11h
+nohup bash test/fuzz/fuzz_overnight_wat.sh --duration=360 > /dev/null 2>&1 &  # WAT, ~6h
+tail -f /tmp/zwasm_fuzz_overnight.log     # Check progress
+```
+
+Results: `.dev/fuzz-overnight-result.txt`, `.dev/fuzz-overnight-wat-result.txt`.
+
+### Harnesses (Zig)
+
+| File                  | Purpose                                          |
+|-----------------------|--------------------------------------------------|
+| `src/fuzz_loader.zig` | Stdin wasm → decode + instantiate + invoke        |
+| `src/fuzz_wat_loader.zig` | Stdin WAT → parse + encode + load + invoke    |
+| `src/fuzz_gen.zig`    | Structure-aware generators + phase-separate tests |
+
+Phase-separate fuzz tests in `fuzz_gen.zig` (run via `zig build test`):
+decoder, validator, predecode, regalloc — each tested independently with `std.testing.fuzz`.
+
+### CI
+
+Nightly (`nightly.yml`, weekly Wed): 60-min fuzz campaign on Ubuntu.
+Crash files auto-saved to `test/fuzz/corpus/crash_*`.
+
 ## Context Efficiency
 
 - **Read with offset/limit**: Never read an entire large file.
