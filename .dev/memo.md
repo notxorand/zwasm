@@ -19,14 +19,13 @@ Session handover document. Read at session start.
 
 **Phase 11: Allocator Injection + Embedding (D128)**
 
-Plan documented. Implementation not started. Design: `@./.dev/references/allocator-injection-plan.md`.
+Design: `@./.dev/references/allocator-injection-plan.md`.
 
-Order:
-1. **11.1** CW finalizer — add `deinit()` in CW gc.zig sweep for wasm_module (ClojureWasm repo)
-2. **11.2** C API config — `zwasm_config_t` + `set_allocator()` + `new_configured()` (zwasm repo)
-3. **11.3** Docs — ARCHITECTURE.md allocator flow, `docs/embedding.md`, book chapter
+- [x] **11.2** C API config — `zwasm_config_t` + `set_allocator()` + `new_configured()` (3d4db98)
+- [x] **11.3** Docs — ARCHITECTURE.md allocator flow, `docs/embedding.md` (d5709f5)
+- [ ] **11.1** CW finalizer — add `deinit()` in CW gc.zig sweep for wasm_module (ClojureWasm repo)
 
-Start with 11.1 (CW side, independent) or 11.2 (zwasm side, independent) — either order works.
+**Next**: 11.1 (CW side). Then Merge Gate → tag v1.5.0.
 
 ## References
 
