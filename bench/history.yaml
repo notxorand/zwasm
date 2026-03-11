@@ -2605,3 +2605,67 @@ entries:
       rw_cpp_string_cached: {time_ms: 7.5}
       rw_cpp_sort: {time_ms: 6.5}
       rw_cpp_sort_cached: {time_ms: 7.0}
+  - id: "timeout-support"
+    date: "2026-03-11"
+    reason: "Add timeout support (PR#6 + CLI + JIT deadline suppression)"
+    commit: "c333873"
+    build: ReleaseSafe
+    results:
+      fib: {time_ms: 50.5}
+      fib_cached: {time_ms: 48.3}
+      tak: {time_ms: 5.7}
+      tak_cached: {time_ms: 7.6}
+      sieve: {time_ms: 4.8}
+      sieve_cached: {time_ms: 0.7}
+      nbody: {time_ms: 24.0}
+      nbody_cached: {time_ms: 22.9}
+      nqueens: {time_ms: 3.8}
+      nqueens_cached: {time_ms: 1.1}
+      tgo_fib: {time_ms: 38.9}
+      tgo_fib_cached: {time_ms: 30.8}
+      tgo_tak: {time_ms: 7.7}
+      tgo_tak_cached: {time_ms: 7.7}
+      tgo_arith: {time_ms: 3.0}
+      tgo_arith_cached: {time_ms: 2.4}
+      tgo_sieve: {time_ms: 3.7}
+      tgo_sieve_cached: {time_ms: 4.8}
+      tgo_fib_loop: {time_ms: 3.0}
+      tgo_fib_loop_cached: {time_ms: 2.8}
+      tgo_gcd: {time_ms: 2.0}
+      tgo_gcd_cached: {time_ms: 3.4}
+      tgo_nqueens: {time_ms: 41.8}
+      tgo_nqueens_cached: {time_ms: 44.0}
+      tgo_mfr: {time_ms: 50.4}
+      tgo_mfr_cached: {time_ms: 50.5}
+      tgo_list: {time_ms: 42.6}
+      tgo_list_cached: {time_ms: 38.2}
+      tgo_rwork: {time_ms: 6.7}
+      tgo_rwork_cached: {time_ms: 7.0}
+      tgo_strops: {time_ms: 33.0}
+      tgo_strops_cached: {time_ms: 34.9}
+      st_fib2: {time_ms: 921.5}
+      st_fib2_cached: {time_ms: 924.6}
+      st_sieve: {time_ms: 187.3}
+      st_sieve_cached: {time_ms: 193.1}
+      st_nestedloop: {time_ms: 1.9}
+      st_nestedloop_cached: {time_ms: 3.1}
+      st_ackermann: {time_ms: 4.6}
+      st_ackermann_cached: {time_ms: 5.7}
+      st_matrix: {time_ms: 291.3}
+      st_matrix_cached: {time_ms: 291.8}
+      gc_alloc: {time_ms: 4.2}
+      gc_alloc_cached: {time_ms: 5.4}
+      gc_tree: {time_ms: 21.7}
+      gc_tree_cached: {time_ms: 24.8}
+      rw_rust_fib: {time_ms: 35.5}
+      rw_rust_fib_cached: {time_ms: 35.4}
+      rw_c_matrix: {time_ms: 21.3}
+      rw_c_matrix_cached: {time_ms: 20.9}
+      rw_c_math: {time_ms: 67.9}
+      rw_c_math_cached: {time_ms: 69.1}
+      rw_c_string: {time_ms: 48.6}
+      rw_c_string_cached: {time_ms: 49.9}
+      rw_cpp_string: {time_ms: 10.1}
+      rw_cpp_string_cached: {time_ms: 8.7}
+      rw_cpp_sort: {time_ms: 9.1}
+      rw_cpp_sort_cached: {time_ms: 7.6}

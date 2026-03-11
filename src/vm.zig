@@ -456,11 +456,11 @@ pub const Vm = struct {
         }
     }
 
-    /// Returns true when JIT must be suppressed because fuel metering is active.
-    /// JIT-compiled native code does not check fuel, so we fall back to the
-    /// interpreter to honour the fuel budget.
+    /// Returns true when JIT must be suppressed because fuel or deadline is active.
+    /// JIT-compiled native code does not call consumeInstructionBudget(),
+    /// so we fall back to the interpreter to honour resource limits.
     pub inline fn jitSuppressed(self: *const Vm) bool {
-        return self.fuel != null;
+        return self.fuel != null or self.deadline_ns != null;
     }
 
     /// Store an exception and return its exnref value (index + 1).
@@ -9725,6 +9725,66 @@ test "Resource limits — fuel metering with infinite loop (JIT suppression)" {
 
     // Verify fuel was fully consumed
     try testing.expectEqual(@as(u64, 0), vm.fuel.?);
+}
+
+test "Resource limits — deadline timeout (expired)" {
+    const wasm_bytes = try readTestFile(testing.allocator, "conformance/memory_ops.wasm");
+    defer testing.allocator.free(wasm_bytes);
+
+    var mod = Module.init(testing.allocator, wasm_bytes);
+    defer mod.deinit();
+    try mod.decode();
+
+    var store = Store.init(testing.allocator);
+    defer store.deinit();
+
+    var inst = Instance.init(testing.allocator, &store, &mod);
+    defer inst.deinit();
+    try inst.instantiate();
+
+    var vm = Vm.init(testing.allocator);
+    vm.deadline_ns = 0; // epoch = always expired
+    vm.deadline_check_remaining = 0; // check immediately
+
+    var results = [_]u64{0};
+    try testing.expectError(error.TimeoutExceeded, vm.invoke(&inst, "memory_size", &.{}, &results));
+}
+
+test "Resource limits — deadline timeout (infinite loop)" {
+    const wasm = try readTestFile(testing.allocator, "30_infinite_loop.wasm");
+    defer testing.allocator.free(wasm);
+
+    var mod = Module.init(testing.allocator, wasm);
+    defer mod.deinit();
+    try mod.decode();
+
+    var store = Store.init(testing.allocator);
+    defer store.deinit();
+
+    var inst = Instance.init(testing.allocator, &store, &mod);
+    defer inst.deinit();
+    try inst.instantiate();
+
+    var vm = Vm.init(testing.allocator);
+    vm.deadline_ns = std.time.nanoTimestamp() - std.time.ns_per_ms;
+    vm.deadline_check_remaining = 0;
+
+    var results = [_]u64{0};
+    try testing.expectError(error.TimeoutExceeded, vm.invoke(&inst, "loop", &.{}, &results));
+}
+
+test "Resource limits — deadline timeout API" {
+    var vm = Vm.init(testing.allocator);
+
+    vm.setDeadlineTimeoutMs(1000);
+    try testing.expect(vm.deadline_ns != null);
+
+    vm.setDeadlineTimeoutMs(null);
+    try testing.expect(vm.deadline_ns == null);
+
+    vm.setDeadlineTimeoutMs(1000);
+    vm.setDeadlineTimeoutMs(0);
+    try testing.expect(vm.deadline_ns == null);
 }
 
 test "Back-edge JIT — hasPrologueSideEffects" {

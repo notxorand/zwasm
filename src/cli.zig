@@ -115,6 +115,7 @@ fn printUsage(w: *std.Io.Writer) void {
         \\  --allow-all         Grant all WASI capabilities
         \\  --max-memory <N>    Memory ceiling in bytes (limits memory.grow)
         \\  --fuel <N>          Instruction fuel limit (traps when exhausted)
+        \\  --timeout <ms>      Execution timeout in milliseconds
         \\  --trace=CATS        Trace categories: jit,regir,exec,mem,call (comma-separated)
         \\  --dump-regir=N      Dump RegIR for function index N
         \\  --cache             Cache predecoded IR to disk for faster startup
@@ -152,6 +153,7 @@ fn cmdRun(allocator: Allocator, args: []const []const u8, stdout: *std.Io.Writer
     var caps = types.Capabilities.cli_default;
     var max_memory_bytes: ?u64 = null;
     var fuel: ?u64 = null;
+    var timeout_ms: ?u64 = null;
 
     // Parse options
     var i: usize = 0;
@@ -257,6 +259,18 @@ fn cmdRun(allocator: Allocator, args: []const []const u8, stdout: *std.Io.Writer
             }
             fuel = std.fmt.parseInt(u64, args[i], 10) catch {
                 try stderr.print("error: --fuel requires a valid number\n", .{});
+                try stderr.flush();
+                return false;
+            };
+        } else if (std.mem.eql(u8, args[i], "--timeout")) {
+            i += 1;
+            if (i >= args.len) {
+                try stderr.print("error: --timeout requires milliseconds\n", .{});
+                try stderr.flush();
+                return false;
+            }
+            timeout_ms = std.fmt.parseInt(u64, args[i], 10) catch {
+                try stderr.print("error: --timeout requires a valid number\n", .{});
                 try stderr.flush();
                 return false;
             };
@@ -440,6 +454,7 @@ fn cmdRun(allocator: Allocator, args: []const []const u8, stdout: *std.Io.Writer
         // Apply resource limits
         module.vm.max_memory_bytes = max_memory_bytes;
         module.vm.fuel = fuel;
+        if (timeout_ms) |ms| module.vm.setDeadlineTimeoutMs(ms);
 
         // Lookup export info for type-aware parsing and validation
         const export_info = module.getExportInfo(func_name);
@@ -587,6 +602,7 @@ fn cmdRun(allocator: Allocator, args: []const []const u8, stdout: *std.Io.Writer
         // Apply resource limits
         module.vm.max_memory_bytes = max_memory_bytes;
         module.vm.fuel = fuel;
+        if (timeout_ms) |ms| module.vm.setDeadlineTimeoutMs(ms);
 
         var no_args = [_]u64{};
         var no_results = [_]u64{};
