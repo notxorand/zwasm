@@ -112,6 +112,13 @@ run_benchmarks() {
                 ;;
         esac
 
+        # Verify command works before benchmarking
+        # shellcheck disable=SC2086
+        if ! $cmd >/dev/null 2>&1; then
+            echo "  $name: FAIL (command failed: $cmd)" >&2
+            $cmd 2>&1 || true
+            continue
+        fi
         # shellcheck disable=SC2086
         hyperfine --warmup "$WARMUP" --runs "$RUNS" --export-json "$json_file" $cmd >/dev/null 2>&1
 
