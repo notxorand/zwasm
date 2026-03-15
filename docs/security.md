@@ -167,4 +167,4 @@ Full Wasm 3.0 compliance (9 proposals):
 - branch_hinting, multi_memory, relaxed_simd
 - function_references, gc
 
-Spec test results: 62,263/62,263 (100.0%) on both macOS ARM64 and Ubuntu x86_64.
+Spec test results: 62,263/62,263 (100.0%) on macOS ARM64, Ubuntu x86_64, and Windows x86_64.

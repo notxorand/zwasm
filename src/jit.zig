@@ -33,6 +33,7 @@ const ValType = @import("opcode.zig").ValType;
 const WasmMemory = @import("memory.zig").Memory;
 const trace_mod = @import("trace.zig");
 const predecode_mod = @import("predecode.zig");
+const platform = @import("platform.zig");
 
 /// JIT-compiled function pointer type.
 /// Args: regs_ptr, vm_ptr, instance_ptr.
@@ -52,14 +53,18 @@ pub const JitCode = struct {
     osr_entry: ?JitFn = null,
 
     pub fn deinit(self: *JitCode, alloc: Allocator) void {
-        std.posix.munmap(self.buf);
+        platform.freePages(self.buf);
         alloc.destroy(self);
     }
 };
 
-/// Returns true if JIT compilation is supported on the current CPU architecture.
+/// Returns true if JIT compilation is supported on the current CPU architecture and host OS.
 pub fn jitSupported() bool {
-    return builtin.cpu.arch == .aarch64 or builtin.cpu.arch == .x86_64;
+    return switch (builtin.os.tag) {
+        .linux, .macos => builtin.cpu.arch == .aarch64 or builtin.cpu.arch == .x86_64,
+        .windows => builtin.cpu.arch == .x86_64,
+        else => false,
+    };
 }
 
 /// Hot function call threshold — JIT after this many calls.
@@ -4729,33 +4734,24 @@ pub const Compiler = struct {
         const page_size = std.heap.page_size_min;
         const buf_size = std.mem.alignForward(usize, code_size, page_size);
 
-        const PROT = std.posix.PROT;
-        const buf = std.posix.mmap(
-            null,
-            buf_size,
-            PROT.READ | PROT.WRITE,
-            .{ .TYPE = .PRIVATE, .ANONYMOUS = true },
-            -1,
-            0,
-        ) catch return null;
-        const aligned_buf: []align(std.heap.page_size_min) u8 = @alignCast(buf);
+        const aligned_buf = platform.allocatePages(buf_size, .read_write) catch return null;
 
         // Copy instructions to executable buffer
         const src_bytes = std.mem.sliceAsBytes(self.code.items);
         @memcpy(aligned_buf[0..src_bytes.len], src_bytes);
 
         // Make executable (W^X transition)
-        std.posix.mprotect(aligned_buf, PROT.READ | PROT.EXEC) catch {
-            std.posix.munmap(aligned_buf);
+        platform.protectPages(aligned_buf, .read_exec) catch {
+            platform.freePages(aligned_buf);
             return null;
         };
 
         // Flush instruction cache
-        icacheInvalidate(aligned_buf.ptr, code_size);
+        platform.flushInstructionCache(aligned_buf.ptr, code_size);
 
         // Allocate JitCode struct
         const jit_code = self.alloc.create(JitCode) catch {
-            std.posix.munmap(aligned_buf);
+            platform.freePages(aligned_buf);
             return null;
         };
         jit_code.* = .{
@@ -5224,20 +5220,6 @@ pub fn compileFunction(
 // ================================================================
 // Instruction cache flush
 // ================================================================
-
-fn icacheInvalidate(ptr: [*]const u8, len: usize) void {
-    if (builtin.os.tag == .macos) {
-        const func = @extern(*const fn ([*]const u8, usize) callconv(.c) void, .{
-            .name = "sys_icache_invalidate",
-        });
-        func(ptr, len);
-    } else if (builtin.os.tag == .linux) {
-        const func = @extern(*const fn ([*]const u8, [*]const u8) callconv(.c) void, .{
-            .name = "__clear_cache",
-        });
-        func(ptr, ptr + len);
-    }
-}
 
 // ================================================================
 // Tests

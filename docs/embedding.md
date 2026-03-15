@@ -63,7 +63,7 @@ defer module.deinit();
 zwasm provides a C API via `include/zwasm.h`. Build the shared library:
 
 ```bash
-zig build lib              # produces libzwasm.so / libzwasm.dylib / libzwasm.a
+zig build lib              # produces libzwasm (.dll/.lib, .dylib/.a, or .so/.a)
 ```
 
 ### Basic Usage
@@ -182,7 +182,9 @@ released when the host no longer needs the module.
 ```python
 import ctypes
 
-lib = ctypes.CDLL("./libzwasm.so")
+import sys
+_ext = {"win32": ".dll", "darwin": ".dylib"}.get(sys.platform, ".so")
+lib = ctypes.CDLL(f"./libzwasm{_ext}")
 
 # Load module
 with open("module.wasm", "rb") as f:

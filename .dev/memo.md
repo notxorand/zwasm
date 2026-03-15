@@ -4,37 +4,33 @@ Session handover document. Read at session start.
 
 ## Current State
 
-- Stages 0-46 + Phase 1, 3, 5 complete. **v1.3.0 released** (tagged 7570170).
-- Spec: 62,263/62,263 Mac+Ubuntu (100.0%, 0 skip). E2E: 792/792 (100.0%, 0 leak).
+- Stages 0-46 + Phase 1, 3, 5, 8, 11, 15 complete. **v1.5.0** (tagged 48342ab).
+- Spec: 62,263/62,263 Mac+Ubuntu+Windows (100.0%, 0 skip). E2E: 792/792. Real-world: 50/50.
 - Wasm 3.0: all 9 proposals. WASI: 46/46 (100%). WAT parser complete.
-- JIT: Register IR + ARM64/x86_64. Size: 1.20MB stripped. RSS: 4.48MB.
-- Module cache: `zwasm run --cache`, `zwasm compile` (D124).
-- **C API**: `libzwasm.so`/`.dylib`/`.a` — 25 exported `zwasm_*` functions (D126).
+- JIT: Register IR + ARM64/x86_64 (macOS, Linux, Windows x86_64). Size: 1.22MB stripped.
+- **Windows x86_64**: First-class support (D129, PR #8). platform.zig abstraction,
+  VEH guard pages, Win64 ABI, HostHandle WASI, Python test runners, CI 3-OS.
+- **C API**: `libzwasm` (.dll/.lib, .dylib/.a, .so/.a) — 25 exported functions (D126).
 - **Conditional compilation**: `-Djit=false`, `-Dcomponent=false`, `-Dwat=false` (D127).
-  Minimal build: ~940KB stripped (24% reduction).
-- **Phase 8 merged to main** (d770bfe). Real-world compat: 50/50 (Mac+Ubuntu).
-- **Phase 11 merged to main** (49f99e5). C API allocator injection (D128).
-- **main = stable**: v1.5.0 tagged (48342ab). ClojureWasm updated to v1.5.0.
+- **main = stable**: v1.5.0. ClojureWasm updated to v1.5.0.
 
 ## Current Task
 
-**Fix JIT fuel bypass + PR #6 timeout merge**
+**PR #8 Windows support review + merge** (branch: `fix/pr8-review-fixes`)
 
+- [x] Code review: 26 files, platform.zig / guard.zig / wasi.zig / x86.zig / CI
+- [x] Fix run_compat.py rust_file_io regression (guest path alias)
+- [x] Fix path_filestat_get SYMLINK_NOFOLLOW restoration
+- [x] Fix README Stage 33 duplicate, run_spec.py .exe detection
+- [x] Code quality: VEH constant, HostHandle.close(), fd placeholder docs
+- [x] Doc updates: embedding.md, security.md, roadmap.md, decisions.md (D129)
+- [ ] Merge Gate (Mac + Ubuntu)
+- [ ] Benchmark recording
+- [ ] Push to PR branch → merge via GitHub
+
+### Pending: JIT fuel bypass + PR #6 timeout
 Checklist: `@./.dev/checklist-jit-fuel-timeout.md`
 PR review: `@./private/pr6-timeout-review.md`
-
-### Phase A: Fix JIT fuel bypass (branch: `fix/jit-fuel-bypass`)
-- [x] A1. Add `jitSuppressed()` — suppress JIT when `fuel != null` (6 locations in vm.zig)
-- [x] A2. Test: infinite loop with fuel=1M terminates (`30_infinite_loop.wasm`)
-- [ ] A3. Commit Gate: `zig build test` pass, spec/e2e/realworld/bench (running)
-- [ ] A4. Merge Gate (Mac + Ubuntu)
-
-### Phase B: Merge timeout support (PR #6 + additions)
-- [ ] B1. Apply PR #6 changes (TimeoutExceeded, deadline, consumeInstructionBudget)
-- [ ] B2. Add `--timeout <ms>` CLI option
-- [ ] B3. Tests + verify with JIT enabled
-- [ ] B4. Commit + Merge Gate
-- [ ] B5. Comment on PR #6, credit DeanoC
 
 ## Handover Notes
 

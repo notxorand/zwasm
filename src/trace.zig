@@ -12,6 +12,7 @@ const Allocator = std.mem.Allocator;
 const regalloc_mod = @import("regalloc.zig");
 const RegFunc = regalloc_mod.RegFunc;
 const RegInstr = regalloc_mod.RegInstr;
+const platform = @import("platform.zig");
 
 /// Trace category bitmask for O(1) enable check.
 pub const TraceCategory = enum(u3) {
@@ -416,7 +417,7 @@ pub fn dumpRegIR(w: *std.Io.Writer, reg_func: *const RegFunc, pool64: []const u6
 // ================================================================
 
 /// Dump JIT-compiled ARM64 code for a function.
-/// Writes raw binary to /tmp, attempts llvm-objdump, falls back to hex.
+/// Writes raw binary to the host temp directory, attempts llvm-objdump, falls back to hex.
 pub fn dumpJitCode(
     alloc: Allocator,
     code_items: []const u32,
@@ -432,15 +433,26 @@ pub fn dumpJitCode(
         func_idx, code_items.len, code_bytes,
     }) catch {};
 
-    // Write raw binary to /tmp
-    var path_buf: [64]u8 = undefined;
-    const bin_path = std.fmt.bufPrint(&path_buf, "/tmp/zwasm_jit_{d}.bin", .{func_idx}) catch {
+    const tmp_dir = platform.tempDirPath(alloc) catch {
+        w.print("  (failed to resolve temp dir)\n", .{}) catch {};
+        w.flush() catch {};
+        return;
+    };
+    defer alloc.free(tmp_dir);
+    const file_name = std.fmt.allocPrint(alloc, "zwasm_jit_{d}.bin", .{func_idx}) catch {
         w.print("  (failed to format path)\n", .{}) catch {};
         w.flush() catch {};
         return;
     };
+    defer alloc.free(file_name);
+    const bin_path = std.fs.path.join(alloc, &.{ tmp_dir, file_name }) catch {
+        w.print("  (failed to format path)\n", .{}) catch {};
+        w.flush() catch {};
+        return;
+    };
+    defer alloc.free(bin_path);
 
-    const file = std.fs.cwd().createFile(bin_path, .{}) catch {
+    const file = std.fs.createFileAbsolute(bin_path, .{}) catch {
         w.print("  (failed to create {s})\n", .{bin_path}) catch {};
         w.flush() catch {};
         return;

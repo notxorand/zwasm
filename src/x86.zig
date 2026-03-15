@@ -4,7 +4,7 @@
 //! x86_64 JIT compiler — compiles register IR to native machine code.
 //! Parallel to ARM64 backend in jit.zig. See D105 in .dev/decisions.md.
 //!
-//! Register mapping (System V AMD64 ABI):
+//! Register mapping (host AMD64 ABI):
 //!   R12:  regs_ptr (callee-saved, base of virtual register file)
 //!   R13:  mem_base (callee-saved, linear memory base pointer)
 //!   R14:  mem_size (callee-saved, linear memory size in bytes)
@@ -23,7 +23,9 @@
 //!
 //! JIT function signature (C calling convention):
 //!   fn(regs: [*]u64, vm: *anyopaque, instance: *anyopaque) callconv(.c) u64
-//!   Entry: RDI=regs, RSI=vm, RDX=instance. Returns: RAX=0 success.
+//!   SysV entry:  RDI=regs, RSI=vm, RDX=instance
+//!   Win64 entry: RCX=regs, RDX=vm, R8=instance
+//!   Returns: RAX=0 success.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -40,6 +42,7 @@ const jit_mod = @import("jit.zig");
 const JitCode = jit_mod.JitCode;
 const JitFn = jit_mod.JitFn;
 const vm_mod = @import("vm.zig");
+const platform = @import("platform.zig");
 
 // ================================================================
 // x86_64 register definitions
@@ -1090,6 +1093,23 @@ fn vregToPhys(vreg: u16) ?Reg {
     };
 }
 
+fn abiRegsArg() Reg {
+    return if (builtin.os.tag == .windows) .rcx else .rdi;
+}
+
+fn abiVmArg() Reg {
+    return if (builtin.os.tag == .windows) .rdx else .rsi;
+}
+
+fn abiInstArg() Reg {
+    return if (builtin.os.tag == .windows) .r8 else .rdx;
+}
+
+fn windowsCallFrameBytes(stack_arg_count: u32) u32 {
+    const bytes = 32 + stack_arg_count * 8;
+    return (bytes + 15) & ~@as(u32, 15);
+}
+
 /// Maximum virtual registers mappable to physical registers.
 const MAX_PHYS_REGS: u8 = 10;
 
@@ -1350,13 +1370,15 @@ pub const Compiler = struct {
         // Save callee-saved registers
         Enc.push(&self.code, self.alloc, .rbx);
         Enc.push(&self.code, self.alloc, .rbp);
+        if (builtin.os.tag == .windows) {
+            Enc.push(&self.code, self.alloc, .rdi);
+            Enc.push(&self.code, self.alloc, .rsi);
+        }
         Enc.push(&self.code, self.alloc, .r12);
         Enc.push(&self.code, self.alloc, .r13);
         Enc.push(&self.code, self.alloc, .r14);
         Enc.push(&self.code, self.alloc, .r15);
-        // Align RSP to 16 bytes. Entry CALL pushed 8 bytes (return addr) +
-        // 6 callee-saved pushes = 56 bytes total, leaving RSP misaligned by 8.
-        // Sub 8 to restore 16-byte alignment required by System V ABI for CALLs.
+        // Align RSP to 16 bytes for nested CALLs.
         Enc.subImm32(&self.code, self.alloc, .rsp, 8);
 
         if (self.has_self_call) {
@@ -1380,8 +1402,8 @@ pub const Compiler = struct {
             // Store marker [RSP] = 0 for self-call (epilogue discrimination)
             Enc.xorRegReg32(&self.code, self.alloc, SCRATCH2, SCRATCH2);
             Enc.storeDisp32(&self.code, self.alloc, .rsp, 0, SCRATCH2);
-            // RDI = callee regs pointer (set by caller)
-            Enc.movRegReg(&self.code, self.alloc, REGS_PTR, .rdi);
+            // ABI arg0 = callee regs pointer (set by caller)
+            Enc.movRegReg(&self.code, self.alloc, REGS_PTR, abiRegsArg());
             // Skip memory cache load and shared setup — memory regs preserved
             // from caller (callee-saved R13/R14). vm/inst already in callee frame.
         }
@@ -1400,11 +1422,11 @@ pub const Compiler = struct {
             Enc.patchRel32(self.code.items, jmp_shared_offset, self.currentOffset());
 
             // --- Normal entry shared setup ---
-            Enc.movRegReg(&self.code, self.alloc, REGS_PTR, .rdi); // R12 = regs_ptr
+            Enc.movRegReg(&self.code, self.alloc, REGS_PTR, abiRegsArg()); // R12 = regs_ptr
             const vm_offset: i32 = (@as(i32, self.reg_count) + 2) * 8;
             const inst_offset: i32 = (@as(i32, self.reg_count) + 3) * 8;
-            Enc.storeDisp32(&self.code, self.alloc, REGS_PTR, vm_offset, .rsi);
-            Enc.storeDisp32(&self.code, self.alloc, REGS_PTR, inst_offset, .rdx);
+            Enc.storeDisp32(&self.code, self.alloc, REGS_PTR, vm_offset, abiVmArg());
+            Enc.storeDisp32(&self.code, self.alloc, REGS_PTR, inst_offset, abiInstArg());
 
             if (self.has_memory) {
                 self.emitLoadMemCache();
@@ -1414,11 +1436,11 @@ pub const Compiler = struct {
             Enc.patchRel32(self.code.items, jmp_vreg_offset, self.currentOffset());
         } else {
             // No self-call: normal setup directly
-            Enc.movRegReg(&self.code, self.alloc, REGS_PTR, .rdi); // R12 = regs_ptr
+            Enc.movRegReg(&self.code, self.alloc, REGS_PTR, abiRegsArg()); // R12 = regs_ptr
             const vm_offset: i32 = (@as(i32, self.reg_count) + 2) * 8;
             const inst_offset: i32 = (@as(i32, self.reg_count) + 3) * 8;
-            Enc.storeDisp32(&self.code, self.alloc, REGS_PTR, vm_offset, .rsi);
-            Enc.storeDisp32(&self.code, self.alloc, REGS_PTR, inst_offset, .rdx);
+            Enc.storeDisp32(&self.code, self.alloc, REGS_PTR, vm_offset, abiVmArg());
+            Enc.storeDisp32(&self.code, self.alloc, REGS_PTR, inst_offset, abiInstArg());
 
             if (self.has_memory) {
                 self.emitLoadMemCache();
@@ -1509,6 +1531,10 @@ pub const Compiler = struct {
         Enc.pop(&self.code, self.alloc, .r14);
         Enc.pop(&self.code, self.alloc, .r13);
         Enc.pop(&self.code, self.alloc, .r12);
+        if (builtin.os.tag == .windows) {
+            Enc.pop(&self.code, self.alloc, .rsi);
+            Enc.pop(&self.code, self.alloc, .rdi);
+        }
         Enc.pop(&self.code, self.alloc, .rbp);
         Enc.pop(&self.code, self.alloc, .rbx);
         Enc.ret_(&self.code, self.alloc);
@@ -1577,12 +1603,16 @@ pub const Compiler = struct {
         // Same callee-saved pushes as normal prologue (must match epilogue order)
         Enc.push(&self.code, self.alloc, .rbx);
         Enc.push(&self.code, self.alloc, .rbp);
+        if (builtin.os.tag == .windows) {
+            Enc.push(&self.code, self.alloc, .rdi);
+            Enc.push(&self.code, self.alloc, .rsi);
+        }
         Enc.push(&self.code, self.alloc, .r12);
         Enc.push(&self.code, self.alloc, .r13);
         Enc.push(&self.code, self.alloc, .r14);
         Enc.push(&self.code, self.alloc, .r15);
 
-        // Sub 8 to restore 16-byte alignment (6 pushes = 48 bytes + 8 from CALL = 56, +8 = 64)
+        // Sub 8 to restore 16-byte alignment for nested CALLs.
         Enc.subImm32(&self.code, self.alloc, .rsp, 8);
 
         // Marker [RSP] = 1 (normal entry — epilogue does full restore)
@@ -1591,14 +1621,14 @@ pub const Compiler = struct {
             Enc.storeDisp32(&self.code, self.alloc, .rsp, 0, SCRATCH2);
         }
 
-        // R12 = REGS_PTR (arg0 = RDI)
-        Enc.movRegReg(&self.code, self.alloc, REGS_PTR, .rdi);
+        // R12 = REGS_PTR (arg0 in host C ABI)
+        Enc.movRegReg(&self.code, self.alloc, REGS_PTR, abiRegsArg());
 
-        // Store VM pointer (RSI) and Instance pointer (RDX) to register file slots
+        // Store VM and Instance pointers to register file slots
         const vm_disp: i32 = (@as(i32, self.reg_count) + 2) * 8;
         const inst_disp: i32 = (@as(i32, self.reg_count) + 3) * 8;
-        Enc.storeDisp32(&self.code, self.alloc, REGS_PTR, vm_disp, .rsi);
-        Enc.storeDisp32(&self.code, self.alloc, REGS_PTR, inst_disp, .rdx);
+        Enc.storeDisp32(&self.code, self.alloc, REGS_PTR, vm_disp, abiVmArg());
+        Enc.storeDisp32(&self.code, self.alloc, REGS_PTR, inst_disp, abiInstArg());
 
         // Load memory cache (if function uses memory)
         if (self.has_memory) {
@@ -1650,20 +1680,43 @@ pub const Compiler = struct {
         }
     }
 
+    fn emitWindowsCallSetup(self: *Compiler, stack_arg_count: u32) u32 {
+        const frame_bytes = windowsCallFrameBytes(stack_arg_count);
+        Enc.subImm32(&self.code, self.alloc, .rsp, @intCast(frame_bytes));
+        return frame_bytes;
+    }
+
+    fn emitWindowsCallArg(self: *Compiler, stack_index: u32, src: Reg) void {
+        const disp: i32 = @intCast(32 + stack_index * 8);
+        Enc.storeDisp32(&self.code, self.alloc, .rsp, disp, src);
+    }
+
     /// Load memory cache: call jitGetMemInfo(instance, &regs[reg_count]) then
     /// load MEM_BASE and MEM_SIZE from the output slots.
     fn emitLoadMemCache(self: *Compiler) void {
-        // System V ABI: RDI=arg0 (instance), RSI=arg1 (&regs[reg_count])
-        self.emitLoadInstPtr(.rdi);
-        // RSI = address of regs[reg_count] = REGS_PTR + reg_count*8
         const out_disp: i32 = @as(i32, self.reg_count) * 8;
-        Enc.movRegReg(&self.code, self.alloc, .rsi, REGS_PTR);
-        if (out_disp > 0) {
-            Enc.addImm32(&self.code, self.alloc, .rsi, out_disp);
+        if (builtin.os.tag == .windows) {
+            self.emitLoadInstPtr(.rcx);
+            Enc.movRegReg(&self.code, self.alloc, .rdx, REGS_PTR);
+            if (out_disp > 0) {
+                Enc.addImm32(&self.code, self.alloc, .rdx, out_disp);
+            }
+            const frame_bytes = self.emitWindowsCallSetup(0);
+            self.emitLoadImm64(SCRATCH, self.mem_info_addr);
+            Enc.callReg(&self.code, self.alloc, SCRATCH);
+            Enc.addImm32(&self.code, self.alloc, .rsp, @intCast(frame_bytes));
+        } else {
+            // System V ABI: RDI=arg0 (instance), RSI=arg1 (&regs[reg_count])
+            self.emitLoadInstPtr(.rdi);
+            // RSI = address of regs[reg_count] = REGS_PTR + reg_count*8
+            Enc.movRegReg(&self.code, self.alloc, .rsi, REGS_PTR);
+            if (out_disp > 0) {
+                Enc.addImm32(&self.code, self.alloc, .rsi, out_disp);
+            }
+            // CALL jitGetMemInfo
+            self.emitLoadImm64(SCRATCH, self.mem_info_addr);
+            Enc.callReg(&self.code, self.alloc, SCRATCH);
         }
-        // CALL jitGetMemInfo
-        self.emitLoadImm64(SCRATCH, self.mem_info_addr);
-        Enc.callReg(&self.code, self.alloc, SCRATCH);
         // Load results: MEM_BASE = regs[reg_count], MEM_SIZE = regs[reg_count+1]
         Enc.loadDisp32(&self.code, self.alloc, MEM_BASE, REGS_PTR, out_disp);
         Enc.loadDisp32(&self.code, self.alloc, MEM_SIZE, REGS_PTR, out_disp + 8);
@@ -1758,12 +1811,20 @@ pub const Compiler = struct {
     /// global.get: call jitGlobalGet(instance, idx) → u64
     fn emitGlobalGet(self: *Compiler, instr: RegInstr) void {
         self.spillCallerSaved();
-        // System V ABI: RDI=instance, ESI=global_idx
-        self.emitLoadInstPtr(.rdi);
-        self.emitLoadImm32(.rsi, @truncate(instr.operand));
-        // CALL jitGlobalGet
-        self.emitLoadImm64(SCRATCH, self.global_get_addr);
-        Enc.callReg(&self.code, self.alloc, SCRATCH);
+        if (builtin.os.tag == .windows) {
+            self.emitLoadInstPtr(.rcx);
+            self.emitLoadImm32(.rdx, @truncate(instr.operand));
+            const frame_bytes = self.emitWindowsCallSetup(0);
+            self.emitLoadImm64(SCRATCH, self.global_get_addr);
+            Enc.callReg(&self.code, self.alloc, SCRATCH);
+            Enc.addImm32(&self.code, self.alloc, .rsp, @intCast(frame_bytes));
+        } else {
+            // System V ABI: RDI=instance, ESI=global_idx
+            self.emitLoadInstPtr(.rdi);
+            self.emitLoadImm32(.rsi, @truncate(instr.operand));
+            self.emitLoadImm64(SCRATCH, self.global_get_addr);
+            Enc.callReg(&self.code, self.alloc, SCRATCH);
+        }
         // Result in RAX (u64)
         self.reloadCallerSaved();
         self.storeVreg(instr.rd, SCRATCH); // SCRATCH = RAX = result
@@ -1772,16 +1833,25 @@ pub const Compiler = struct {
     /// global.set: call jitGlobalSet(instance, idx, val)
     fn emitGlobalSet(self: *Compiler, instr: RegInstr) void {
         self.spillCallerSaved();
-        // Load value to RDX FIRST — before clobbering RDI/RSI with call args.
-        // The value vreg may be in RDI or RSI (caller-saved, still valid after spill).
         const val_reg = self.getOrLoad(instr.rd, SCRATCH);
-        Enc.movRegReg(&self.code, self.alloc, .rdx, val_reg);
-        // System V ABI: RDI=instance, ESI=global_idx, RDX=value (already set)
-        self.emitLoadInstPtr(.rdi);
-        self.emitLoadImm32(.rsi, @truncate(instr.operand));
-        // CALL jitGlobalSet
-        self.emitLoadImm64(SCRATCH, self.global_set_addr);
-        Enc.callReg(&self.code, self.alloc, SCRATCH);
+        if (builtin.os.tag == .windows) {
+            Enc.movRegReg(&self.code, self.alloc, .r8, val_reg);
+            self.emitLoadInstPtr(.rcx);
+            self.emitLoadImm32(.rdx, @truncate(instr.operand));
+            const frame_bytes = self.emitWindowsCallSetup(0);
+            self.emitLoadImm64(SCRATCH, self.global_set_addr);
+            Enc.callReg(&self.code, self.alloc, SCRATCH);
+            Enc.addImm32(&self.code, self.alloc, .rsp, @intCast(frame_bytes));
+        } else {
+            // Load value to RDX FIRST — before clobbering RDI/RSI with call args.
+            // The value vreg may be in RDI or RSI (caller-saved, still valid after spill).
+            Enc.movRegReg(&self.code, self.alloc, .rdx, val_reg);
+            // System V ABI: RDI=instance, ESI=global_idx, RDX=value (already set)
+            self.emitLoadInstPtr(.rdi);
+            self.emitLoadImm32(.rsi, @truncate(instr.operand));
+            self.emitLoadImm64(SCRATCH, self.global_set_addr);
+            Enc.callReg(&self.code, self.alloc, SCRATCH);
+        }
         self.reloadCallerSaved();
         self.scratch_vreg = null;
     }
@@ -1807,36 +1877,48 @@ pub const Compiler = struct {
             }
         }
 
-        // 2. Set up trampoline args (System V AMD64 ABI: RDI, RSI, RDX, RCX, R8, R9):
-        //    RDI=vm, RSI=instance, RDX=regs, ECX=func_idx, R8D=rd, R9=data_word
-        //    data2 goes on the stack (7th argument)
-        self.emitLoadVmPtr(.rdi);
-        self.emitLoadInstPtr(.rsi);
-        Enc.movRegReg(&self.code, self.alloc, .rdx, REGS_PTR);
-        self.emitLoadImm32(.rcx, func_idx);
-        self.emitLoadImm32(.r8, @as(u32, rd));
-        // Pack data word as u64 into R9
         const data_u64 = packDataWord(data);
-        self.emitLoadImm64(.r9, data_u64);
-        // data2 as 7th argument: push onto stack
-        if (data2) |d2| {
-            const d2_u64 = packDataWord(d2);
-            self.emitLoadImm64(SCRATCH, d2_u64);
+        if (builtin.os.tag == .windows) {
+            // Win64 ABI: RCX, RDX, R8, R9 then stack args after 32-byte shadow space.
+            self.emitLoadVmPtr(.rcx);
+            self.emitLoadInstPtr(.rdx);
+            Enc.movRegReg(&self.code, self.alloc, .r8, REGS_PTR);
+            self.emitLoadImm32(.r9, func_idx);
+
+            const frame_bytes = self.emitWindowsCallSetup(3);
+            self.emitLoadImm32(SCRATCH2, @as(u32, rd));
+            self.emitWindowsCallArg(0, SCRATCH2);
+            self.emitLoadImm64(SCRATCH2, data_u64);
+            self.emitWindowsCallArg(1, SCRATCH2);
+            if (data2) |d2| {
+                self.emitLoadImm64(SCRATCH2, packDataWord(d2));
+            } else {
+                Enc.xorRegReg32(&self.code, self.alloc, SCRATCH2, SCRATCH2);
+            }
+            self.emitWindowsCallArg(2, SCRATCH2);
+
+            self.emitLoadImm64(SCRATCH, self.trampoline_addr);
+            Enc.callReg(&self.code, self.alloc, SCRATCH);
+            Enc.addImm32(&self.code, self.alloc, .rsp, @intCast(frame_bytes));
         } else {
-            Enc.xorRegReg32(&self.code, self.alloc, SCRATCH, SCRATCH);
+            // System V AMD64 ABI: RDI, RSI, RDX, RCX, R8, R9; data2 on stack.
+            self.emitLoadVmPtr(.rdi);
+            self.emitLoadInstPtr(.rsi);
+            Enc.movRegReg(&self.code, self.alloc, .rdx, REGS_PTR);
+            self.emitLoadImm32(.rcx, func_idx);
+            self.emitLoadImm32(.r8, @as(u32, rd));
+            self.emitLoadImm64(.r9, data_u64);
+            if (data2) |d2| {
+                self.emitLoadImm64(SCRATCH, packDataWord(d2));
+            } else {
+                Enc.xorRegReg32(&self.code, self.alloc, SCRATCH, SCRATCH);
+            }
+            Enc.subImm32(&self.code, self.alloc, .rsp, 8);
+            Enc.push(&self.code, self.alloc, SCRATCH);
+            self.emitLoadImm64(SCRATCH, self.trampoline_addr);
+            Enc.callReg(&self.code, self.alloc, SCRATCH);
+            Enc.addImm32(&self.code, self.alloc, .rsp, 16);
         }
-        // Alignment padding: RSP is 16-aligned after prologue; one push would
-        // leave RSP at 8 mod 16, violating the ABI before CALL.
-        // Sub 8 first so that push + sub = 16 bytes, keeping RSP 16-aligned.
-        Enc.subImm32(&self.code, self.alloc, .rsp, 8);
-        Enc.push(&self.code, self.alloc, SCRATCH); // 7th arg on stack
-
-        // 3. CALL trampoline
-        self.emitLoadImm64(SCRATCH, self.trampoline_addr);
-        Enc.callReg(&self.code, self.alloc, SCRATCH);
-
-        // 4. Clean up stack (remove 7th arg + alignment padding = 16 bytes)
-        Enc.addImm32(&self.code, self.alloc, .rsp, 16);
 
         // 5. Check error (RAX != 0 → error)
         Enc.testRegReg(&self.code, self.alloc, .rax, .rax);
@@ -1875,36 +1957,56 @@ pub const Compiler = struct {
         }
         self.spillVreg(instr.rs1);
 
-        // 2. System V AMD64: RDI=vm, RSI=instance, RDX=regs, ECX=type_idx_table_idx,
-        //    R8D=result_reg, R9=data_word, stack[0]=data2_word, stack[1]=elem_idx
-        self.emitLoadVmPtr(.rdi);
-        self.emitLoadInstPtr(.rsi);
-        Enc.movRegReg(&self.code, self.alloc, .rdx, REGS_PTR);
-        self.emitLoadImm32(.rcx, instr.operand);
-        self.emitLoadImm32(.r8, @as(u32, instr.rd));
         const data_u64 = packDataWord(data);
-        self.emitLoadImm64(.r9, data_u64);
-
-        // Push elem_idx (8th arg) first, then data2 (7th arg) — right to left
-        // Load elem_idx from regs[instr.rs1]
         const elem_disp: i32 = @as(i32, @intCast(instr.rs1)) * 8;
-        Enc.loadDisp32(&self.code, self.alloc, SCRATCH, REGS_PTR, elem_disp);
-        Enc.push(&self.code, self.alloc, SCRATCH); // 8th arg
+        if (builtin.os.tag == .windows) {
+            self.emitLoadVmPtr(.rcx);
+            self.emitLoadInstPtr(.rdx);
+            Enc.movRegReg(&self.code, self.alloc, .r8, REGS_PTR);
+            self.emitLoadImm32(.r9, instr.operand);
 
-        if (data2) |d2| {
-            const d2_u64 = packDataWord(d2);
-            self.emitLoadImm64(SCRATCH, d2_u64);
+            const frame_bytes = self.emitWindowsCallSetup(4);
+            self.emitLoadImm32(SCRATCH2, @as(u32, instr.rd));
+            self.emitWindowsCallArg(0, SCRATCH2);
+            self.emitLoadImm64(SCRATCH2, data_u64);
+            self.emitWindowsCallArg(1, SCRATCH2);
+            if (data2) |d2| {
+                self.emitLoadImm64(SCRATCH2, packDataWord(d2));
+            } else {
+                Enc.xorRegReg32(&self.code, self.alloc, SCRATCH2, SCRATCH2);
+            }
+            self.emitWindowsCallArg(2, SCRATCH2);
+            Enc.loadDisp32(&self.code, self.alloc, SCRATCH2, REGS_PTR, elem_disp);
+            self.emitWindowsCallArg(3, SCRATCH2);
+
+            self.emitLoadImm64(SCRATCH, self.call_indirect_addr);
+            Enc.callReg(&self.code, self.alloc, SCRATCH);
+            Enc.addImm32(&self.code, self.alloc, .rsp, @intCast(frame_bytes));
         } else {
-            Enc.xorRegReg32(&self.code, self.alloc, SCRATCH, SCRATCH);
+            // System V AMD64: RDI=vm, RSI=instance, RDX=regs, ECX=type_idx_table_idx,
+            //    R8D=result_reg, R9=data_word, stack[0]=data2_word, stack[1]=elem_idx
+            self.emitLoadVmPtr(.rdi);
+            self.emitLoadInstPtr(.rsi);
+            Enc.movRegReg(&self.code, self.alloc, .rdx, REGS_PTR);
+            self.emitLoadImm32(.rcx, instr.operand);
+            self.emitLoadImm32(.r8, @as(u32, instr.rd));
+            self.emitLoadImm64(.r9, data_u64);
+
+            // Push elem_idx (8th arg) first, then data2 (7th arg) — right to left
+            Enc.loadDisp32(&self.code, self.alloc, SCRATCH, REGS_PTR, elem_disp);
+            Enc.push(&self.code, self.alloc, SCRATCH); // 8th arg
+
+            if (data2) |d2| {
+                self.emitLoadImm64(SCRATCH, packDataWord(d2));
+            } else {
+                Enc.xorRegReg32(&self.code, self.alloc, SCRATCH, SCRATCH);
+            }
+            Enc.push(&self.code, self.alloc, SCRATCH); // 7th arg
+
+            self.emitLoadImm64(SCRATCH, self.call_indirect_addr);
+            Enc.callReg(&self.code, self.alloc, SCRATCH);
+            Enc.addImm32(&self.code, self.alloc, .rsp, 16);
         }
-        Enc.push(&self.code, self.alloc, SCRATCH); // 7th arg
-
-        // 3. CALL trampoline
-        self.emitLoadImm64(SCRATCH, self.call_indirect_addr);
-        Enc.callReg(&self.code, self.alloc, SCRATCH);
-
-        // 4. Clean up stack (2 pushed args = 16 bytes)
-        Enc.addImm32(&self.code, self.alloc, .rsp, 16);
 
         // 5. Check error
         Enc.testRegReg(&self.code, self.alloc, .rax, .rax);
@@ -1972,21 +2074,22 @@ pub const Compiler = struct {
         Enc.addImm32(&self.code, self.alloc, SCRATCH, 1);
         Enc.storeDisp32(&self.code, self.alloc, SCRATCH2, cd_offset, SCRATCH);
 
-        // 5. Compute callee REGS_PTR in RDI: R12 + needed_bytes
-        Enc.movRegReg(&self.code, self.alloc, .rdi, REGS_PTR);
-        Enc.addImm32(&self.code, self.alloc, .rdi, @intCast(needed_bytes));
+        // 5. Compute callee REGS_PTR in arg0 register: caller REGS_PTR + needed_bytes
+        const callee_regs_arg = abiRegsArg();
+        Enc.movRegReg(&self.code, self.alloc, callee_regs_arg, REGS_PTR);
+        Enc.addImm32(&self.code, self.alloc, callee_regs_arg, @intCast(needed_bytes));
 
         // 6. Copy args from caller's physical regs/memory to callee frame
-        self.emitArgCopyDirect(.rdi, data.rd, 0);
-        if (n_args > 1) self.emitArgCopyDirect(.rdi, data.rs1, 8);
-        if (n_args > 2) self.emitArgCopyDirect(.rdi, data.rs2_field, 16);
-        if (n_args > 3) self.emitArgCopyDirect(.rdi, @truncate(data.operand), 24);
+        self.emitArgCopyDirect(callee_regs_arg, data.rd, 0);
+        if (n_args > 1) self.emitArgCopyDirect(callee_regs_arg, data.rs1, 8);
+        if (n_args > 2) self.emitArgCopyDirect(callee_regs_arg, data.rs2_field, 16);
+        if (n_args > 3) self.emitArgCopyDirect(callee_regs_arg, @truncate(data.operand), 24);
         if (n_args > 4) {
             if (data2) |d2| {
-                if (n_args > 4) self.emitArgCopyDirect(.rdi, d2.rd, 32);
-                if (n_args > 5) self.emitArgCopyDirect(.rdi, d2.rs1, 40);
-                if (n_args > 6) self.emitArgCopyDirect(.rdi, d2.rs2_field, 48);
-                if (n_args > 7) self.emitArgCopyDirect(.rdi, @truncate(d2.operand), 56);
+                if (n_args > 4) self.emitArgCopyDirect(callee_regs_arg, d2.rd, 32);
+                if (n_args > 5) self.emitArgCopyDirect(callee_regs_arg, d2.rs1, 40);
+                if (n_args > 6) self.emitArgCopyDirect(callee_regs_arg, d2.rs2_field, 48);
+                if (n_args > 7) self.emitArgCopyDirect(callee_regs_arg, @truncate(d2.operand), 56);
             }
         }
 
@@ -1995,7 +2098,7 @@ pub const Compiler = struct {
             Enc.xorRegReg32(&self.code, self.alloc, SCRATCH, SCRATCH);
             for (n_args..self.local_count) |i| {
                 const offset: i32 = @intCast(i * 8);
-                Enc.storeDisp32(&self.code, self.alloc, .rdi, offset, SCRATCH);
+                Enc.storeDisp32(&self.code, self.alloc, callee_regs_arg, offset, SCRATCH);
             }
         }
 
@@ -2003,9 +2106,9 @@ pub const Compiler = struct {
         const vm_slot: i32 = (@as(i32, self.reg_count) + 2) * 8;
         const inst_slot: i32 = (@as(i32, self.reg_count) + 3) * 8;
         Enc.loadDisp32(&self.code, self.alloc, SCRATCH, REGS_PTR, vm_slot);
-        Enc.storeDisp32(&self.code, self.alloc, .rdi, vm_slot, SCRATCH);
+        Enc.storeDisp32(&self.code, self.alloc, callee_regs_arg, vm_slot, SCRATCH);
         Enc.loadDisp32(&self.code, self.alloc, SCRATCH, REGS_PTR, inst_slot);
-        Enc.storeDisp32(&self.code, self.alloc, .rdi, inst_slot, SCRATCH);
+        Enc.storeDisp32(&self.code, self.alloc, callee_regs_arg, inst_slot, SCRATCH);
 
         // 9. CALL self_call_entry (direct, no trampoline)
         // Emit CALL rel32 — target is self_call_entry_offset in the code buffer.
@@ -2096,14 +2199,21 @@ pub const Compiler = struct {
     /// Emit memory.grow via trampoline call.
     fn emitMemGrow(self: *Compiler, instr: RegInstr) void {
         self.spillCallerSaved();
-        // Load pages BEFORE clobbering RDI — value may be in RDI (vreg 4)
         const pages_reg = self.getOrLoad(instr.rs1, SCRATCH);
-        Enc.movRegReg32(&self.code, self.alloc, .rsi, pages_reg);
-        // System V: RDI=instance, RSI=pages (already set)
-        self.emitLoadInstPtr(.rdi);
-        // CALL jitMemGrow
-        self.emitLoadImm64(SCRATCH, self.mem_grow_addr);
-        Enc.callReg(&self.code, self.alloc, SCRATCH);
+        if (builtin.os.tag == .windows) {
+            Enc.movRegReg32(&self.code, self.alloc, .rdx, pages_reg);
+            self.emitLoadInstPtr(.rcx);
+            const frame_bytes = self.emitWindowsCallSetup(0);
+            self.emitLoadImm64(SCRATCH, self.mem_grow_addr);
+            Enc.callReg(&self.code, self.alloc, SCRATCH);
+            Enc.addImm32(&self.code, self.alloc, .rsp, @intCast(frame_bytes));
+        } else {
+            // Load pages BEFORE clobbering RDI — value may be in RDI (vreg 4)
+            Enc.movRegReg32(&self.code, self.alloc, .rsi, pages_reg);
+            self.emitLoadInstPtr(.rdi);
+            self.emitLoadImm64(SCRATCH, self.mem_grow_addr);
+            Enc.callReg(&self.code, self.alloc, SCRATCH);
+        }
         // Result in EAX (u32): old_pages or 0xFFFFFFFF
         // Store result to regs[rd] immediately (before RAX is clobbered)
         const rd_disp: i32 = @as(i32, instr.rd) * 8;
@@ -2126,14 +2236,24 @@ pub const Compiler = struct {
         self.spillVreg(instr.rd);
         self.spillVreg(instr.rs1);
         self.spillVreg(instr.rs2());
-        // System V: RDI=instance, ESI=dst, EDX=val, ECX=n
-        Enc.loadDisp32(&self.code, self.alloc, .rsi, REGS_PTR, @as(i32, instr.rd) * 8);
-        Enc.loadDisp32(&self.code, self.alloc, .rdx, REGS_PTR, @as(i32, instr.rs1) * 8);
-        Enc.loadDisp32(&self.code, self.alloc, .rcx, REGS_PTR, @as(i32, instr.rs2()) * 8);
-        self.emitLoadInstPtr(.rdi);
-        // CALL jitMemFill
-        self.emitLoadImm64(SCRATCH, self.mem_fill_addr);
-        Enc.callReg(&self.code, self.alloc, SCRATCH);
+        if (builtin.os.tag == .windows) {
+            self.emitLoadInstPtr(.rcx);
+            Enc.loadDisp32(&self.code, self.alloc, .rdx, REGS_PTR, @as(i32, instr.rd) * 8);
+            Enc.loadDisp32(&self.code, self.alloc, .r8, REGS_PTR, @as(i32, instr.rs1) * 8);
+            Enc.loadDisp32(&self.code, self.alloc, .r9, REGS_PTR, @as(i32, instr.rs2()) * 8);
+            const frame_bytes = self.emitWindowsCallSetup(0);
+            self.emitLoadImm64(SCRATCH, self.mem_fill_addr);
+            Enc.callReg(&self.code, self.alloc, SCRATCH);
+            Enc.addImm32(&self.code, self.alloc, .rsp, @intCast(frame_bytes));
+        } else {
+            // System V: RDI=instance, ESI=dst, EDX=val, ECX=n
+            Enc.loadDisp32(&self.code, self.alloc, .rsi, REGS_PTR, @as(i32, instr.rd) * 8);
+            Enc.loadDisp32(&self.code, self.alloc, .rdx, REGS_PTR, @as(i32, instr.rs1) * 8);
+            Enc.loadDisp32(&self.code, self.alloc, .rcx, REGS_PTR, @as(i32, instr.rs2()) * 8);
+            self.emitLoadInstPtr(.rdi);
+            self.emitLoadImm64(SCRATCH, self.mem_fill_addr);
+            Enc.callReg(&self.code, self.alloc, SCRATCH);
+        }
         // Check error (EAX != 0 → OOB)
         Enc.testRegReg32(&self.code, self.alloc, .rax, .rax);
         self.emitCondError(.ne, 6); // OutOfBoundsMemoryAccess
@@ -2148,14 +2268,24 @@ pub const Compiler = struct {
         self.spillVreg(instr.rd);
         self.spillVreg(instr.rs1);
         self.spillVreg(instr.rs2());
-        // System V: RDI=instance, ESI=dst, EDX=src, ECX=n
-        Enc.loadDisp32(&self.code, self.alloc, .rsi, REGS_PTR, @as(i32, instr.rd) * 8);
-        Enc.loadDisp32(&self.code, self.alloc, .rdx, REGS_PTR, @as(i32, instr.rs1) * 8);
-        Enc.loadDisp32(&self.code, self.alloc, .rcx, REGS_PTR, @as(i32, instr.rs2()) * 8);
-        self.emitLoadInstPtr(.rdi);
-        // CALL jitMemCopy
-        self.emitLoadImm64(SCRATCH, self.mem_copy_addr);
-        Enc.callReg(&self.code, self.alloc, SCRATCH);
+        if (builtin.os.tag == .windows) {
+            self.emitLoadInstPtr(.rcx);
+            Enc.loadDisp32(&self.code, self.alloc, .rdx, REGS_PTR, @as(i32, instr.rd) * 8);
+            Enc.loadDisp32(&self.code, self.alloc, .r8, REGS_PTR, @as(i32, instr.rs1) * 8);
+            Enc.loadDisp32(&self.code, self.alloc, .r9, REGS_PTR, @as(i32, instr.rs2()) * 8);
+            const frame_bytes = self.emitWindowsCallSetup(0);
+            self.emitLoadImm64(SCRATCH, self.mem_copy_addr);
+            Enc.callReg(&self.code, self.alloc, SCRATCH);
+            Enc.addImm32(&self.code, self.alloc, .rsp, @intCast(frame_bytes));
+        } else {
+            // System V: RDI=instance, ESI=dst, EDX=src, ECX=n
+            Enc.loadDisp32(&self.code, self.alloc, .rsi, REGS_PTR, @as(i32, instr.rd) * 8);
+            Enc.loadDisp32(&self.code, self.alloc, .rdx, REGS_PTR, @as(i32, instr.rs1) * 8);
+            Enc.loadDisp32(&self.code, self.alloc, .rcx, REGS_PTR, @as(i32, instr.rs2()) * 8);
+            self.emitLoadInstPtr(.rdi);
+            self.emitLoadImm64(SCRATCH, self.mem_copy_addr);
+            Enc.callReg(&self.code, self.alloc, SCRATCH);
+        }
         // Check error
         Enc.testRegReg32(&self.code, self.alloc, .rax, .rax);
         self.emitCondError(.ne, 6);
@@ -2951,29 +3081,20 @@ pub const Compiler = struct {
         const page_size = std.heap.page_size_min;
         const buf_size = std.mem.alignForward(usize, code_size, page_size);
 
-        const PROT = std.posix.PROT;
-        const buf = std.posix.mmap(
-            null,
-            buf_size,
-            PROT.READ | PROT.WRITE,
-            .{ .TYPE = .PRIVATE, .ANONYMOUS = true },
-            -1,
-            0,
-        ) catch return null;
-        const aligned_buf: []align(std.heap.page_size_min) u8 = @alignCast(buf);
+        const aligned_buf = platform.allocatePages(buf_size, .read_write) catch return null;
 
         @memcpy(aligned_buf[0..code_size], self.code.items);
 
         // W^X transition
-        std.posix.mprotect(aligned_buf, PROT.READ | PROT.EXEC) catch {
-            std.posix.munmap(aligned_buf);
+        platform.protectPages(aligned_buf, .read_exec) catch {
+            platform.freePages(aligned_buf);
             return null;
         };
 
         // x86_64 has coherent I/D caches — no icache flush needed.
 
         const jit_code = self.alloc.create(JitCode) catch {
-            std.posix.munmap(aligned_buf);
+            platform.freePages(aligned_buf);
             return null;
         };
         jit_code.* = .{

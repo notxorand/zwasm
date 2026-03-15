@@ -194,6 +194,7 @@ pub fn build(b: *std.Build) void {
             .name = ct.name,
             .root_module = ct_mod,
         });
+        ct_exe.linkLibC();
         // Install only via c-test step (not default install) to keep artifact count
         // below Zig 0.15.2 build runner shuffle bug threshold on some platforms.
         c_test_step.dependOn(&b.addInstallArtifact(ct_exe, .{}).step);

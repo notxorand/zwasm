@@ -148,16 +148,17 @@ Largest technical challenge.
 
 **Gate**: SIMD bench faster than scalar. zwasm v2.0.0 candidate.
 
-### Phase 15: Windows Port (3 days)
+### Phase 15: Windows Port (3 days) — DONE (PR #8, D129)
 
-- D## decision record (SEH, VirtualAlloc, CI strategy)
-- Memory management OS abstraction (mmap → VirtualAlloc)
-- Signal handler port (SIGSEGV → SEH)
-- JIT W^X port (VirtualProtect + FlushInstructionCache)
-- WASI filesystem Windows branch
-- CI Windows job + release binaries
+- [x] D129 decision record (VEH, VirtualAlloc, CI strategy)
+- [x] Memory management OS abstraction (mmap → VirtualAlloc) — `platform.zig`
+- [x] Signal handler port (SIGSEGV → VEH) — `guard.zig`
+- [x] JIT W^X port (VirtualProtect + FlushInstructionCache) — `jit.zig`
+- [x] WASI filesystem Windows branch — `wasi.zig` HostHandle abstraction
+- [x] CI Windows job + release binaries — `ci.yml`, `release.yml`
+- [x] x86_64 JIT Win64 ABI (RCX/RDX/R8, shadow space) — `x86.zig`
 
-**Gate**: Windows x86_64 all tests pass. 3-OS support complete.
+**Gate**: Windows x86_64 all tests pass. 3-OS CI complete.
 
 ### Phase 18: Book i18n + Lazy Compilation + CLI Extensions (3 days)
 
@@ -195,7 +196,8 @@ JIT deferred to first call. Trampoline → direct jump patch.
 | **v1.3.0** | 1, 3 | Guard pages, cache, CI automation, ARCHITECTURE.md |
 | **v1.4.0** | 5, 8 | C API, conditional compilation, 50+ real-world, WAT parity |
 | **v1.5.0** | 11     | Allocator injection, C API config, embedding docs |
-| **v2.0.0** | 13, 15 | SIMD JIT, Windows, 3-OS support                   |
+| **v1.6.0** | 15     | Windows x86_64, 3-OS CI, platform abstraction      |
+| **v2.0.0** | 13     | SIMD JIT (NEON/SSE)                                |
 
 ## Benchmark History
 

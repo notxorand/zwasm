@@ -19,8 +19,11 @@ import glob
 import argparse
 import tempfile
 import shutil
+import queue
+import threading
+import time
 
-ZWASM = "./zig-out/bin/zwasm"
+ZWASM = "./zig-out/bin/zwasm.exe" if sys.platform == "win32" else "./zig-out/bin/zwasm"
 SPEC_DIR = "test/spec/json"
 SPECTEST_WASM = "test/spec/spectest.wasm"
 
@@ -322,6 +325,8 @@ class BatchRunner:
         self.proc = None
         self.needs_state = False  # True if actions have been executed
         self._debug = False
+        self._stdout_queue = None
+        self._stdout_thread = None
         self._start()
 
     def _start(self):
@@ -335,7 +340,27 @@ class BatchRunner:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            encoding="utf-8",
+            bufsize=1,
         )
+        self._stdout_queue = queue.Queue()
+        self._stdout_thread = threading.Thread(target=self._pump_stdout, daemon=True)
+        self._stdout_thread.start()
+
+    def _pump_stdout(self):
+        """Continuously transfer stdout lines to a queue for cross-platform timeouts."""
+        try:
+            while self.proc and self.proc.stdout:
+                try:
+                    line = self.proc.stdout.readline()
+                except (OSError, ValueError):
+                    break
+                if not line:
+                    break
+                self._stdout_queue.put(line.strip())
+        finally:
+            if self._stdout_queue is not None:
+                self._stdout_queue.put(None)
 
     def _has_problematic_name(self, func_name):
         """Check if function name contains characters that break the line protocol."""
@@ -368,16 +393,13 @@ class BatchRunner:
             self.proc.stdin.write(cmd_line)
             self.proc.stdin.flush()
 
-            import select
-            ready, _, _ = select.select([self.proc.stdout], [], [], timeout)
-            if not ready:
+            response = self._read_response(timeout)
+            if response == "timeout":
                 self.proc.kill()
                 self._cleanup_proc()
                 self.proc = None
                 return (False, "timeout")
-
-            response = self.proc.stdout.readline().strip()
-            if not response:
+            if response == "no_response":
                 return (False, "no response")
             if response.startswith("ok"):
                 parts = response.split()
@@ -412,16 +434,13 @@ class BatchRunner:
             self.proc.stdin.write(cmd_line)
             self.proc.stdin.flush()
 
-            import select
-            ready, _, _ = select.select([self.proc.stdout], [], [], timeout)
-            if not ready:
+            response = self._read_response(timeout)
+            if response == "timeout":
                 self.proc.kill()
                 self._cleanup_proc()
                 self.proc = None
                 return (False, "timeout")
-
-            response = self.proc.stdout.readline().strip()
-            if not response:
+            if response == "no_response":
                 return (False, "no response")
             if response.startswith("ok"):
                 parts = response.split()
@@ -448,16 +467,13 @@ class BatchRunner:
             self.proc.stdin.write(cmd_line)
             self.proc.stdin.flush()
 
-            import select
-            ready, _, _ = select.select([self.proc.stdout], [], [], timeout)
-            if not ready:
+            response = self._read_response(timeout)
+            if response == "timeout":
                 self.proc.kill()
                 self._cleanup_proc()
                 self.proc = None
                 return (False, "timeout")
-
-            response = self.proc.stdout.readline().strip()
-            if not response:
+            if response == "no_response":
                 return (False, "no response")
             if response.startswith("ok"):
                 parts = response.split()
@@ -484,16 +500,13 @@ class BatchRunner:
             self.proc.stdin.write(cmd_line)
             self.proc.stdin.flush()
 
-            import select
-            ready, _, _ = select.select([self.proc.stdout], [], [], timeout)
-            if not ready:
+            response = self._read_response(timeout)
+            if response == "timeout":
                 self.proc.kill()
                 self._cleanup_proc()
                 self.proc = None
                 return (False, "timeout")
-
-            response = self.proc.stdout.readline().strip()
-            if not response:
+            if response == "no_response":
                 return (False, "no response")
             if response.startswith("ok"):
                 parts = response.split()
@@ -509,14 +522,23 @@ class BatchRunner:
             return (False, str(e))
 
     def _cleanup_proc(self):
-        """Close all pipes on the process to avoid BrokenPipeError on GC."""
-        if self.proc:
-            for pipe in (self.proc.stdin, self.proc.stdout, self.proc.stderr):
-                try:
-                    if pipe:
-                        pipe.close()
-                except Exception:
-                    pass
+        """Clean up process-owned resources without racing the stdout pump on Windows."""
+        proc = self.proc
+        thread = self._stdout_thread
+        if proc and proc.stdin:
+            try:
+                proc.stdin.close()
+            except Exception:
+                pass
+        if thread and thread.is_alive():
+            thread.join(timeout=0.2)
+        if proc and proc.stderr:
+            try:
+                proc.stderr.close()
+            except Exception:
+                pass
+        self._stdout_thread = None
+        self._stdout_queue = None
 
     def send_batch_cmd(self, cmd, timeout=5):
         """Send a raw batch command and return (success, response)."""
@@ -528,11 +550,11 @@ class BatchRunner:
                 _sys.stderr.write(f"  [CMD] {cmd}\n")
             self.proc.stdin.write(cmd + "\n")
             self.proc.stdin.flush()
-            import select
-            ready, _, _ = select.select([self.proc.stdout], [], [], timeout)
-            if not ready:
+            response = self._read_response(timeout)
+            if response == "timeout":
                 return (False, "timeout")
-            response = self.proc.stdout.readline().strip()
+            if response == "no_response":
+                return (False, "no response")
             if self._debug:
                 _sys.stderr.write(f"  [RSP] {response}\n")
             return (response.startswith("ok"), response)
@@ -545,11 +567,12 @@ class BatchRunner:
 
     def _read_response(self, timeout=5):
         """Read a single line response from the batch process."""
-        import select
-        ready, _, _ = select.select([self.proc.stdout], [], [], timeout)
-        if not ready:
+        if self._stdout_queue is None:
+            return "no_response"
+        try:
+            response = self._stdout_queue.get(timeout=timeout)
+        except queue.Empty:
             return "timeout"
-        response = self.proc.stdout.readline().strip()
         return response if response else "no_response"
 
     def load_module(self, name, wasm_path):
@@ -589,15 +612,11 @@ class BatchRunner:
         self.proc.stdin.write(f"thread_wait {thread_name}\n")
         self.proc.stdin.flush()
         results = []
-        # First read uses select for timeout; subsequent reads use direct readline
-        # since data may already be in Python's internal read buffer.
-        import select
-        ready, _, _ = select.select([self.proc.stdout], [], [], timeout)
-        if not ready:
-            return results
+        deadline = time.monotonic() + timeout
         while True:
-            line = self.proc.stdout.readline().strip()
-            if not line:
+            remaining = max(0.0, deadline - time.monotonic())
+            line = self._read_response(remaining)
+            if line in ("timeout", "no_response"):
                 break
             if line.startswith("thread_result "):
                 results.append(line[len("thread_result "):])
@@ -610,10 +629,15 @@ class BatchRunner:
     def close(self):
         if self.proc and self.proc.poll() is None:
             try:
-                self.proc.stdin.close()
+                if self.proc.stdin:
+                    self.proc.stdin.close()
                 self.proc.wait(timeout=5)
             except Exception:
                 self.proc.kill()
+                try:
+                    self.proc.wait(timeout=5)
+                except Exception:
+                    pass
         self._cleanup_proc()
         self.proc = None
 
@@ -740,7 +764,7 @@ def run_test_file(json_path, verbose=False, wat_mode=False, wat_dir=None):
     wat_stats is a dict with keys: conv_ok, conv_fail, conv_fail_files (list).
     Only populated when wat_mode=True.
     """
-    with open(json_path) as f:
+    with open(json_path, encoding="utf-8") as f:
         data = json.load(f)
 
     test_dir = os.path.dirname(json_path)

@@ -13,8 +13,12 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const platform = @import("platform.zig");
+const page_size = std.heap.page_size_min;
+
 const posix = std.posix;
-const PROT = std.c.PROT;
+const windows = std.os.windows;
+const kernel32 = std.os.windows.kernel32;
 
 /// Guard region size: 4 GiB + 64 KiB.
 /// This ensures any 32-bit index (0..0xFFFFFFFF) + small offset (up to 64 KiB)
@@ -52,14 +56,7 @@ pub const GuardedMem = struct {
     /// Allocate a guarded memory region. Initially all pages are PROT_NONE.
     /// Call `makeAccessible` to enable read/write for the data portion.
     pub fn init() !GuardedMem {
-        const buf = posix.mmap(
-            null,
-            TOTAL_RESERVATION,
-            PROT.NONE,
-            .{ .TYPE = .PRIVATE, .ANONYMOUS = true },
-            -1,
-            0,
-        ) catch return error.MmapFailed;
+        const buf = platform.reservePages(TOTAL_RESERVATION, .none) catch return error.MmapFailed;
         return .{
             .base = @alignCast(buf.ptr),
             .accessible = 0,
@@ -75,10 +72,9 @@ pub const GuardedMem = struct {
         }
         if (size > TOTAL_RESERVATION - GUARD_SIZE) return error.ExceedsCapacity;
         // Round up to page boundary
-        const page_size = std.heap.page_size_min;
         const aligned = (size + page_size - 1) & ~(page_size - 1);
         const region: []align(std.heap.page_size_min) u8 = @alignCast(self.base[0..aligned]);
-        posix.mprotect(region, PROT.READ | PROT.WRITE) catch return error.MprotectFailed;
+        platform.commitPages(region, .read_write) catch return error.MprotectFailed;
         self.accessible = size;
     }
 
@@ -89,12 +85,11 @@ pub const GuardedMem = struct {
         const new_size = old + delta;
         if (new_size > TOTAL_RESERVATION - GUARD_SIZE) return error.ExceedsCapacity;
         // Only need to mprotect the newly added pages
-        const page_size = std.heap.page_size_min;
         const old_aligned = (old + page_size - 1) & ~(page_size - 1);
         const new_aligned = (new_size + page_size - 1) & ~(page_size - 1);
         if (new_aligned > old_aligned) {
             const region: []align(std.heap.page_size_min) u8 = @alignCast(self.base[old_aligned..new_aligned]);
-            posix.mprotect(region, PROT.READ | PROT.WRITE) catch return error.MprotectFailed;
+            platform.commitPages(region, .read_write) catch return error.MprotectFailed;
         }
         self.accessible = new_size;
         return old;
@@ -108,7 +103,7 @@ pub const GuardedMem = struct {
     /// Release the entire mmap'd region.
     pub fn deinit(self: *GuardedMem) void {
         const region: []align(std.heap.page_size_min) u8 = @alignCast(self.base[0..TOTAL_RESERVATION]);
-        posix.munmap(region);
+        platform.freePages(region);
         self.base = undefined;
         self.accessible = 0;
     }
@@ -132,6 +127,11 @@ pub fn getRecovery() *RecoveryInfo {
 /// Install the signal handler for guard page faults.
 /// Must be called once at startup.
 pub fn installSignalHandler() void {
+    if (comptime builtin.os.tag == .windows) {
+        installWindowsHandler();
+        return;
+    }
+
     const handler_fn = struct {
         fn handler(_: i32, _: *const posix.siginfo_t, ctx_ptr: ?*anyopaque) callconv(.c) void {
             const rec = getRecovery();
@@ -174,6 +174,38 @@ pub fn installSignalHandler() void {
     } else {
         posix.sigaction(posix.SIG.SEGV, &act, null);
     }
+}
+
+var windows_handler_installed = false;
+
+fn installWindowsHandler() void {
+    if (windows_handler_installed) return;
+    const handle = kernel32.AddVectoredExceptionHandler(1, windowsHandler);
+    if (handle != null) {
+        windows_handler_installed = true;
+    }
+}
+
+fn windowsHandler(info: *windows.EXCEPTION_POINTERS) callconv(.winapi) c_long {
+    const rec = getRecovery();
+    if (!rec.active) return windows.EXCEPTION_CONTINUE_SEARCH;
+
+    const record = info.ExceptionRecord;
+    if (record.ExceptionCode != windows.EXCEPTION_ACCESS_VIOLATION) {
+        return windows.EXCEPTION_CONTINUE_SEARCH;
+    }
+
+    const ctx = info.ContextRecord;
+    const faulting_pc = getWindowsPc(ctx);
+    if (faulting_pc < rec.jit_code_start or faulting_pc >= rec.jit_code_end) {
+        return windows.EXCEPTION_CONTINUE_SEARCH;
+    }
+
+    setWindowsPc(ctx, rec.oob_exit_pc);
+    setWindowsReturnReg(ctx, 6);
+    rec.active = false;
+    const EXCEPTION_CONTINUE_EXECUTION: c_long = -1;
+    return EXCEPTION_CONTINUE_EXECUTION;
 }
 
 fn resetAndReraise() void {
@@ -246,6 +278,30 @@ fn setReturnReg(ctx: *align(1) posix.ucontext_t, value: u64) void {
         } else {
             ctx.mcontext.gregs[13] = value; // RAX on Linux
         }
+    }
+}
+
+fn getWindowsPc(ctx: *windows.CONTEXT) usize {
+    return switch (builtin.cpu.arch) {
+        .aarch64 => @intCast(ctx.Pc),
+        .x86_64 => @intCast(ctx.Rip),
+        else => @compileError("unsupported Windows arch for guard pages"),
+    };
+}
+
+fn setWindowsPc(ctx: *windows.CONTEXT, pc: usize) void {
+    switch (builtin.cpu.arch) {
+        .aarch64 => ctx.Pc = pc,
+        .x86_64 => ctx.Rip = pc,
+        else => @compileError("unsupported Windows arch for guard pages"),
+    }
+}
+
+fn setWindowsReturnReg(ctx: *windows.CONTEXT, value: u64) void {
+    switch (builtin.cpu.arch) {
+        .aarch64 => ctx.DUMMYUNIONNAME.DUMMYSTRUCTNAME.X0 = value,
+        .x86_64 => ctx.Rax = value,
+        else => @compileError("unsupported Windows arch for guard pages"),
     }
 }
 

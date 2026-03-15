@@ -7,6 +7,12 @@
 
 A small, fast WebAssembly runtime written in Zig. Library and CLI.
 
+Supported host targets:
+- `aarch64-macos`
+- `x86_64-linux`
+- `aarch64-linux`
+- `x86_64-windows`
+
 ## Why zwasm
 
 > **Note**: zwasm is under active development. Real-world Wasm compatibility
@@ -27,7 +33,7 @@ zwasm was extracted from [ClojureWasm](https://github.com/clojurewasm/ClojureWas
 
 - **581+ opcodes**: Full MVP + SIMD (236 + 20 relaxed) + Exception handling + Function references + GC + Threads (79 atomics)
 - **4-tier execution**: bytecode > predecoded IR > register IR > ARM64/x86_64 JIT
-- **100% spec conformance**: 62,263/62,263 spec tests, 792/792 E2E tests, 50 real-world programs (Mac + Ubuntu)
+- **100% spec conformance**: 62,263/62,263 spec tests, 792/792 E2E tests, 50 real-world programs (macOS + Linux + Windows x86_64 CI)
 - **All Wasm 3.0 proposals**: See [Spec Coverage](#wasm-spec-coverage) below
 - **Component Model**: WIT parser, Canonical ABI, component linking, WASI P2 adapter
 - **WAT support**: `zwasm file.wat`, build-time optional (`-Dwat=false`)
@@ -76,16 +82,22 @@ Full results (29 benchmarks): `bench/runtime_comparison.yaml`
 
 ## Install
 
+macOS / Linux:
+
 ```bash
-# From source (requires Zig 0.15.2)
 zig build -Doptimize=ReleaseSafe
 cp zig-out/bin/zwasm ~/.local/bin/
 
-# Or use the install script
 curl -fsSL https://raw.githubusercontent.com/clojurewasm/zwasm/main/install.sh | bash
+```
 
-# Or via Homebrew (macOS/Linux) — coming soon
-# brew install clojurewasm/tap/zwasm
+Windows (PowerShell):
+
+```powershell
+zig build -Doptimize=ReleaseSafe
+Copy-Item zig-out\bin\zwasm.exe "$env:LOCALAPPDATA\Microsoft\WindowsApps\zwasm.exe"
+
+irm https://raw.githubusercontent.com/clojurewasm/zwasm/main/install.ps1 | iex
 ```
 
 ## Usage
@@ -125,7 +137,7 @@ See [docs/usage.md](docs/usage.md) for detailed library and CLI documentation.
 zwasm also exposes a C API for use from any FFI-capable language (C, Python, Rust, Go, etc.):
 
 ```bash
-zig build lib    # Build libzwasm (.dylib / .so / .a)
+zig build lib    # Build libzwasm (.dll/.lib, .dylib/.a, or .so/.a)
 ```
 
 ```c
@@ -182,8 +194,11 @@ Requires Zig 0.15.2.
 ```bash
 zig build              # Build (Debug)
 zig build test         # Run all tests (521 tests)
+zig build c-test       # Run C API tests
 ./zig-out/bin/zwasm run file.wasm
 ```
+
+On Windows use `zig-out\bin\zwasm.exe`.
 
 ### Feature flags
 
@@ -237,8 +252,8 @@ aim to replace wasmtime for general use. Instead, it targets
 environments where size and startup time matter: embedded systems, edge
 computing, CLI tools, and as an embeddable library in Zig projects.
 
-**ARM64-first, x86_64 supported.** Primary optimization on Apple Silicon and ARM64 Linux.
-x86_64 JIT also available for Linux server deployment.
+**ARM64-first, x86_64 supported.** Primary optimization is still Apple Silicon and ARM64 Linux.
+x86_64 JIT is supported on Linux and Windows.
 
 **Spec fidelity over expedience.** Correctness comes before performance.
 The spec test suite runs on every change.
@@ -257,14 +272,15 @@ The spec test suite runs on every change.
 - [x] Stage 23: JIT optimization (smart spill, direct call, FP cache, self-call inline)
 - [x] Stage 25: Lightweight self-call (fib now matches wasmtime)
 - [x] Stages 26-31: JIT peephole, platform verification, spec cleanup, GC benchmarks
-- [x] Stage 32: 100% spec conformance (62,263/62,263 on Mac + Ubuntu)
+- [x] Stage 32: 100% spec conformance (62,263/62,263 on macOS + Linux)
 - [x] Stage 33: Fuzz testing (differential testing, extended fuzz campaign, 0 crashes)
+- [x] Stage 34: Windows x86_64 native support (build, test, JIT, C API, release artifacts)
 - [x] Stages 35-41: Production hardening (crash safety, CI/CD, docs, API stability, distribution)
 - [x] Stages 42-43: Community preparation, v1.0.0 release
 - [x] Stages 44-47: WAT parser spec parity, SIMD perf analysis, book i18n, WAT roundtrip 100%
 - [x] Reliability: Cross-platform verification (50 real-world programs), JIT correctness (OSR, back-edge, guard pages)
 - [x] Phase 8: Real-world coverage (50 programs), WAT parity 100%, 5 JIT codegen fixes
-- [ ] Future: SIMD JIT (NEON/SSE), Windows port, WASI P3/async
+- [ ] Future: SIMD JIT (NEON/SSE), WASI P3/async
 
 ## Known Limitations
 

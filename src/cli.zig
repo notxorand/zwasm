@@ -104,7 +104,8 @@ fn printUsage(w: *std.Io.Writer) void {
         \\  --invoke <func>     Call <func> instead of _start
         \\  --batch             Batch mode: read invocations from stdin
         \\  --link name=file    Link a module as import source (repeatable)
-        \\  --dir <path>        Preopen a host directory (repeatable)
+        \\  --dir <host[::guest]>
+        \\                     Preopen a host directory, optionally at a guest path
         \\  --env KEY=VALUE     Set a WASI environment variable (repeatable)
         \\  --profile           Print execution profile (opcode frequency, call counts)
         \\  --sandbox           Deny all capabilities + fuel 1B + memory 256MB
@@ -1302,10 +1303,11 @@ fn cmdBatch(allocator: Allocator, wasm_bytes: []const u8, imports: []const types
     }
 
     while (true) {
-        const line = r.takeDelimiter('\n') catch |err| switch (err) {
+        const raw_line = r.takeDelimiter('\n') catch |err| switch (err) {
             error.StreamTooLong => continue,
             else => break,
         } orelse break;
+        const line = std.mem.trimRight(u8, raw_line, "\r");
 
         // Skip empty lines
         if (line.len == 0) continue;
@@ -1480,7 +1482,8 @@ fn cmdBatch(allocator: Allocator, wasm_bytes: []const u8, imports: []const types
             };
             // Buffer invocations until thread_end
             while (true) {
-                const tline = r.takeDelimiter('\n') catch break orelse break;
+                const raw_tline = r.takeDelimiter('\n') catch break orelse break;
+                const tline = std.mem.trimRight(u8, raw_tline, "\r");
                 if (std.mem.eql(u8, tline, "thread_end")) break;
                 if (!std.mem.startsWith(u8, tline, "invoke ")) continue;
                 // Parse: invoke <len>:<func> [args...]

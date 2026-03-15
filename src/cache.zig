@@ -21,6 +21,7 @@ const Allocator = std.mem.Allocator;
 const predecode_mod = @import("predecode.zig");
 const PreInstr = predecode_mod.PreInstr;
 const IrFunc = predecode_mod.IrFunc;
+const platform = @import("platform.zig");
 
 pub const MAGIC: [8]u8 = "ZWCACHE\x00".*;
 pub const VERSION: u32 = 1;
@@ -165,8 +166,7 @@ pub fn wasmHash(wasm_bin: []const u8) [32]u8 {
 /// Get cache directory path (~/.cache/zwasm/). Creates it if needed.
 /// Returns owned slice. Caller must free.
 pub fn getCacheDir(alloc: Allocator) ![]u8 {
-    const home = std.posix.getenv("HOME") orelse return error.NoCacheDir;
-    const path = try std.fmt.allocPrint(alloc, "{s}/.cache/zwasm", .{home});
+    const path = try platform.appCacheDir(alloc, "zwasm");
     // Ensure directory exists
     std.fs.makeDirAbsolute(path) catch |err| switch (err) {
         error.PathAlreadyExists => {},

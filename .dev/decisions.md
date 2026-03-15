@@ -363,4 +363,51 @@ Backward compatible — NULL config uses default allocator.
 **Precedents**: SQLite (`SQLITE_CONFIG_MALLOC`), Lua (`lua_newstate(alloc_fn, ud)`),
 jemalloc, mimalloc — all accept custom allocators from the host.
 
+---
+
+## D129: Windows First-Class Support — Platform Abstraction
+
+**Date**: 2026-03-15
+**Status**: Complete (PR #8, commit 48f68a7)
+**Decision**: Add Windows x86_64 as a first-class target via platform abstraction
+layer, without compromising Mac/Linux code quality.
+
+**Problem**: zwasm used POSIX APIs directly (mmap, mprotect, signals, fd_t).
+Windows requires VirtualAlloc, VEH, HANDLE-based I/O.
+
+**Design**:
+
+1. **`platform.zig`** — Unified OS abstraction for page-level memory:
+   - `reservePages`/`commitPages`/`protectPages`/`freePages` (mmap ↔ VirtualAlloc)
+   - `flushInstructionCache` (sys_icache_invalidate / __clear_cache / FlushInstructionCache)
+   - `appCacheDir`/`tempDirPath` (cross-platform paths)
+
+2. **`guard.zig`** — OOB trap via VEH on Windows:
+   - POSIX: SIGSEGV signal handler modifies ucontext PC
+   - Windows: VEH handler modifies CONTEXT.Rip/Pc on EXCEPTION_ACCESS_VIOLATION
+   - Same recovery logic (JIT code range check → redirect to OOB exit stub)
+
+3. **`wasi.zig`** — HostHandle abstraction:
+   - `posix.fd_t` → `HostHandle { raw: Handle, kind: .file|.dir }`
+   - POSIX file ops (read/write/lseek) → `std.fs.File` methods
+   - `path_open`: Windows uses `Dir.openDir`/`createFile`; POSIX keeps `openat`
+   - `FdEntry.append` field for Windows O_APPEND emulation
+
+4. **`x86.zig`** — Win64 ABI support:
+   - SysV: RDI/RSI/RDX args, RDI/RSI caller-saved
+   - Win64: RCX/RDX/R8 args, RDI/RSI callee-saved, 32-byte shadow space
+   - Compile-time dispatch via `abiRegsArg()`/`abiVmArg()`/`abiInstArg()`
+
+5. **Test infrastructure** — bash → Python migration:
+   - All test runners rewritten in Python for cross-platform support
+   - bash wrappers retained for Mac/Linux backward compatibility
+   - `select.select()` → `queue.Queue` + threading (Windows stdio)
+
+**Scope**: x86_64 Windows only. ARM64 Windows deferred (no test hardware).
+
+**Trade-offs**:
+- `writeFilestat`: nlink always 1 on portable path (std.fs.File.Stat lacks nlink)
+- `path_filestat_get`: POSIX retains fstatat for SYMLINK_NOFOLLOW; Windows always follows
+- Binary size/memory checks skipped on Windows CI (no strip/time -v equivalents)
+
 Related: D126 (C API), D127 (conditional compilation), CW D110, cw-new D13.
