@@ -4541,11 +4541,21 @@ pub const Vm = struct {
 
             switch (instr.op) {
                 // ---- Register ops ----
-                regalloc_mod.OP_MOV => regs[instr.rd] = regs[instr.rs1],
+                regalloc_mod.OP_MOV => {
+                    regs[instr.rd] = regs[instr.rs1];
+                    if (instr.rd < 512 and instr.rs1 < 512)
+                        simd_hi[instr.rd] = simd_hi[instr.rs1];
+                },
 
-                regalloc_mod.OP_CONST32 => regs[instr.rd] = instr.operand,
+                regalloc_mod.OP_CONST32 => {
+                    regs[instr.rd] = instr.operand;
+                    if (instr.rd < 512) simd_hi[instr.rd] = 0;
+                },
 
-                regalloc_mod.OP_CONST64 => regs[instr.rd] = pool64[instr.operand],
+                regalloc_mod.OP_CONST64 => {
+                    regs[instr.rd] = pool64[instr.operand];
+                    if (instr.rd < 512) simd_hi[instr.rd] = 0;
+                },
 
                 // ---- Control flow ----
                 regalloc_mod.OP_BR => {
