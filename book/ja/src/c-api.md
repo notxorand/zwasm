@@ -116,6 +116,32 @@ zig build lib
 python3 examples/python/basic.py
 ```
 
+## クイックスタート: Rust (FFI)
+
+Rust からも `extern "C"` バインディングで同じ C API を呼び出せます:
+
+```rust
+#[link(name = "zwasm")]
+unsafe extern "C" {
+    fn zwasm_module_new(wasm_ptr: *const u8, len: usize) -> *mut zwasm_module_t;
+    fn zwasm_module_invoke(
+        module: *mut zwasm_module_t, name: *const std::ffi::c_char,
+        args: *const u64, nargs: u32, results: *mut u64, nresults: u32,
+    ) -> bool;
+    fn zwasm_module_delete(module: *mut zwasm_module_t);
+}
+```
+
+ビルドと実行 (Rust 1.85+ が必要、edition 2024):
+
+```bash
+zig build shared-lib
+cd examples/rust && cargo run
+# f() = 42
+```
+
+完全な動作例は `examples/rust/` を参照してください。
+
 ## API リファレンス
 
 関数はドメインごとにグループ化されています。すべてのシグネチャは `include/zwasm.h` に定義されています。
@@ -285,5 +311,5 @@ zwasm_module_delete(mod);
 ## 次のステップ
 
 - [ビルド設定](./build-configuration.md) — コンパイルに含める機能のカスタマイズ
-- `examples/c/` と `examples/python/` — リポジトリ内の動作する例
+- `examples/c/`、`examples/python/`、`examples/rust/` — リポジトリ内の動作する例
 - `include/zwasm.h` — ドキュメントコメント付きの完全な C ヘッダ

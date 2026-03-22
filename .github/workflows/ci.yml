@@ -66,6 +66,10 @@ jobs:
           rustup target add wasm32-wasip1
           rustc --version
 
+      - name: Run Rust FFI example
+        if: runner.os != 'Windows'
+        run: cd examples/rust && cargo run
+
       - name: Install wasm-tools
         run: |
           source .github/tool-versions

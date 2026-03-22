@@ -12,9 +12,9 @@ zig-cache/
 # Python
 __pycache__/
 
-# Rust
-target/
-Cargo.lock
+# Rust example build artifacts
+examples/rust/target/
+examples/rust/Cargo.lock
 
 # Editor
 *.swp

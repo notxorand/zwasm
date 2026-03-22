@@ -116,6 +116,32 @@ zig build lib
 python3 examples/python/basic.py
 ```
 
+## Quickstart: Rust (FFI)
+
+Rust can call the same C API via `extern "C"` bindings:
+
+```rust
+#[link(name = "zwasm")]
+unsafe extern "C" {
+    fn zwasm_module_new(wasm_ptr: *const u8, len: usize) -> *mut zwasm_module_t;
+    fn zwasm_module_invoke(
+        module: *mut zwasm_module_t, name: *const std::ffi::c_char,
+        args: *const u64, nargs: u32, results: *mut u64, nresults: u32,
+    ) -> bool;
+    fn zwasm_module_delete(module: *mut zwasm_module_t);
+}
+```
+
+Build and run (requires Rust 1.85+ for edition 2024):
+
+```bash
+zig build shared-lib
+cd examples/rust && cargo run
+# f() = 42
+```
+
+See `examples/rust/` for the full working example.
+
 ## API reference
 
 Functions are grouped by domain. All signatures live in `include/zwasm.h`.
@@ -285,5 +311,5 @@ zwasm_module_delete(mod);
 ## Next steps
 
 - [Build Configuration](./build-configuration.md) — customize which features are compiled in
-- `examples/c/` and `examples/python/` — working examples in the repository
+- `examples/c/`, `examples/python/`, and `examples/rust/` — working examples in the repository
 - `include/zwasm.h` — the complete C header with doc comments
