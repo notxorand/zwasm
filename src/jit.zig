@@ -2221,7 +2221,6 @@ pub const Compiler = struct {
         self.param_count = param_count;
         self.result_count = result_count;
         self.reg_ptr_offset = reg_ptr_offset;
-        self.jit_fuel_offset = @intCast(@offsetOf(vm_mod.Vm, "jit_fuel"));
 
         // Scan IR for memory opcodes, self-calls, and non-self calls
         self.has_memory = scanForMemoryOps(reg_func.code);
@@ -3329,6 +3328,8 @@ pub const Compiler = struct {
     /// Decrements jit_fuel in the VM struct; if negative, branches to a shared
     /// fuel-exhausted exit (emitted once at end of function by emitErrorStubs).
     fn emitFuelCheck(self: *Compiler) void {
+        // Skip when offset is 0 (unit tests without Vm struct)
+        if (self.jit_fuel_offset == 0) return;
         // Load vm_ptr → SCRATCH (x8)
         self.emitLoadVmPtr(SCRATCH);
         const fuel_reg: u5 = 0; // x0: safe — not mapped to any vreg
@@ -5265,6 +5266,7 @@ pub fn compileFunction(
     compiler.use_guard_pages = use_guard_pages;
     compiler.osr_target_pc = osr_target_pc;
     compiler.gc_trampoline_addr = gc_trampoline_addr;
+    compiler.jit_fuel_offset = @intCast(@offsetOf(vm_mod.Vm, "jit_fuel"));
 
     // Dump JIT code before deinit (pc_map still alive, one-shot)
     if (trace) |tc| {
