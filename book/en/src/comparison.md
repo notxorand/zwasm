@@ -8,13 +8,13 @@ How zwasm compares to other WebAssembly runtimes.
 |---------|-------|----------|-------|--------|
 | Language | Zig | Rust | C | Rust/C |
 | Binary size | ~1.2 MB | 56 MB | ~100 KB | 30+ MB |
-| Memory (fib) | 4.5 MB | 12 MB | ~1 MB | 15+ MB |
+| Memory (fib) | 3.5 MB | 12 MB | ~1 MB | 15+ MB |
 | Execution | Interp + JIT | AOT/JIT | Interpreter | AOT/JIT |
 | Wasm 3.0 | Full | Full | Partial | Partial |
 | GC proposal | Yes | Yes | No | No |
 | SIMD | Full (256 ops) | Full | Partial | Full |
 | WASI | P1 (46 syscalls) | P1 + P2 | P1 (partial) | P1 + P2 |
-| Platforms | macOS, Linux | macOS, Linux, Windows | Many (no JIT) | macOS, Linux, Windows |
+| Platforms | macOS, Linux, Windows | macOS, Linux, Windows | Many (no JIT) | macOS, Linux, Windows |
 
 ## When to choose zwasm
 
@@ -28,9 +28,7 @@ How zwasm compares to other WebAssembly runtimes.
 
 ## When to choose alternatives
 
-**Maximum throughput**: wasmtime's Cranelift AOT compiler produces highly optimized native code. For long-running compute-heavy workloads, wasmtime may be faster. In particular, SIMD-heavy workloads are currently ~22x slower on zwasm (stack interpreter, no SIMD JIT yet).
-
-**Windows support**: zwasm currently supports macOS and Linux. For Windows, use wasmtime or wasmer.
+**Maximum throughput**: wasmtime's Cranelift AOT compiler produces highly optimized native code. For long-running compute-heavy workloads, wasmtime may be faster. SIMD microbenchmarks are competitive (matrix_mul beats wasmtime), but compiler-generated SIMD code shows larger gaps due to split v128 storage overhead.
 
 **Minimal size**: wasm3 is ~100 KB and runs on microcontrollers. If you need the absolute smallest runtime without JIT, wasm3 may be a better fit.
 

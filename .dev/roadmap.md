@@ -6,14 +6,15 @@ Benchmark target: **wasmtime**. Optimization target: ARM64 Mac first.
 **Library Consumer Guarantee**: ClojureWasm depends on zwasm main via GitHub URL.
 All development on feature branches; merge to main requires Merge Gate.
 
-## Completed (v1.2.0)
+## Completed
 
-Stages 0-46 complete. Details: `roadmap-archive.md`.
+Stages 0-46 + Phase 1, 3, 5, 8, 10, 11, 13, 15, 19 complete. Details: `roadmap-archive.md`.
 
 - Wasm 3.0: all 9 proposals (581+ opcodes). WASI P1 46/46. WAT parser.
-- JIT: Register IR + ARM64/x86_64. Spec: 62,263/62,263 (100%, 0 skip).
-- E2E: 792/792 (0 leak). Real-world: 50/50. Fuzz: 10K+ iterations, 0 crashes.
-- Size: 1.20MB stripped / 4.48MB RSS. Mac + Ubuntu x86_64.
+- JIT: Register IR + ARM64/x86_64 + SIMD (NEON 253/256, SSE 244/256).
+- Spec: 62,263/62,263 (100%, 0 skip). E2E: 792/792. Real-world: 50/50.
+- Fuzz: 10K+ iterations, 0 crashes. Size: 1.23MB stripped / 3.5MB RSS.
+- Platforms: macOS ARM64, Linux x86_64/ARM64, Windows x86_64.
 
 ## Future Phases (zwasm only)
 
@@ -101,14 +102,14 @@ cli.zig (signal handler install).
 
 **Gate**: PASSED. Mac + Ubuntu compat 50/50, spec 62,263/62,263, E2E 792/792.
 
-### Phase 10: Quality / Stabilization (zwasm portion, 1 day)
+### Phase 10: Quality / Stabilization (zwasm portion, 1 day) — COMPLETE
 
 - Full test suite re-verification (Mac + Ubuntu)
 - Benchmark regression check
 - Size guard confirmation (≤ 1.5MB)
 - Merge Gate pass
 
-**Gate**: All test suites pass. No regressions.
+**Gate**: PASSED. All test suites pass. No regressions.
 
 ### Phase 11: Allocator Injection + Embedding (D128, 2 days)
 
@@ -136,7 +137,7 @@ Design reference: `.dev/references/allocator-injection-plan.md`.
 
 **Gate**: PASSED. Mac + Ubuntu all tests pass. v1.5.0 tagged.
 
-### Phase 13: SIMD JIT (D130)
+### Phase 13: SIMD JIT (D130) — COMPLETE
 
 Largest technical challenge. Long-lived branch: `phase13/simd-jit`.
 Research: `.dev/references/simd-jit-research.md`.
@@ -226,9 +227,9 @@ Real-world benefit arrives only after near-full coverage (D3 finding).
 - Mac + Ubuntu + Windows: all tests pass
 - Benchmarks recorded: `bash bench/record.sh --id=13.8 --reason="SIMD JIT gate"`
 
-**Gate**: SIMD bench faster than scalar. zwasm v2.0.0 candidate.
+**Gate**: PASSED. SIMD bench faster than scalar (3/4 microbench). Merged 2026-03-23.
 
-### Phase 15: Windows Port (3 days) — DONE (PR #8, D129)
+### Phase 15: Windows Port (3 days) — COMPLETE (PR #8, D129)
 
 - [x] D129 decision record (VEH, VirtualAlloc, CI strategy)
 - [x] Memory management OS abstraction (mmap → VirtualAlloc) — `platform.zig`
@@ -240,7 +241,7 @@ Real-world benefit arrives only after near-full coverage (D3 finding).
 
 **Gate**: Windows x86_64 all tests pass. 3-OS CI complete.
 
-### Phase 19: JIT Reliability (2 days)
+### Phase 19: JIT Reliability (2 days) — COMPLETE
 
 Make JIT a verifiably correct optimization layer over the interpreter.
 Principle: interpreter is the source of truth; JIT must produce identical results.

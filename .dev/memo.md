@@ -4,41 +4,48 @@ Session handover document. Read at session start.
 
 ## Current State
 
-- Stages 0-46 + Phase 1, 3, 5, 8, 11, 13, 15, **19** complete.
-- Spec: 62,263/62,263 Mac+Ubuntu+Windows (100.0%, 0 skip). E2E: 792/792 (Mac), 773/792 (Ubuntu). Real-world: 50/50.
-- Wasm 3.0: all 9 proposals. WASI: 46/46 (100%). WAT parser complete.
-- JIT: Register IR + ARM64/x86_64 + **SIMD (NEON 253/256, SSE 244/256)**.
-- **C API**: c_allocator + ReleaseSafe default (#11 fix). 64-test FFI suite.
-- **CLI**: `--interp` flag for interpreter-only execution (Phase 19 debug tool).
-- **main = stable**. ClojureWasm updated to v1.5.0. Phase 13 merged 2026-03-23.
+- Stages 0-46 + Phase 1, 3, 5, 8, 10, 11, 13, 15, 19 all complete.
+- Spec: 62,263/62,263 Mac+Ubuntu+Windows (100.0%, 0 skip).
+- E2E: 792/792 (Mac+Ubuntu). Real-world: 50/50.
+- JIT: Register IR + ARM64/x86_64 + SIMD (NEON 253/256, SSE 244/256).
+- Binary: 1.23MB stripped. Memory: ~3.5MB RSS.
+- Platforms: macOS ARM64, Linux x86_64/ARM64, Windows x86_64.
+- **main = stable**. ClojureWasm updated to v1.5.0.
 
 ## Current Task
 
-**Fix: x86_64 wide-arithmetic E2E failures** — 19 tests fail on Ubuntu x86_64.
+**Doc overhaul & production readiness** — Branch `cleanup/doc-overhaul`.
 
-Pre-existing on main (not a Phase 13 regression). Symptoms:
-- Line 3: decode error (Overflow)
-- Lines 69+: assert_return mismatches — values doubled (1→2), inverted (0xFFFF→0x0)
-- Likely x86_64 JIT codegen bug for wide-arithmetic operations (i64.mul_wide_s/u etc.)
+Transition from "active feature development" to "stable, fast, spec-tracking" posture.
+All major features complete. Focus shifts to:
+- Documentation accuracy and completeness
+- Long-term maintenance strategy (spec tracking, Zig upgrades)
+- Performance: W37 (contiguous v128), W38 (compiler patterns)
+- Remaining work: Phase 18 (Lazy Compilation, CLI Extensions)
 
-### Remaining Workarounds
+### Open Work Items
 
-| Workaround              | Status | Plan                       |
-|--------------------------|--------|----------------------------|
-| jitSuppressed(deadline) | Active | Epoch-based check (future) |
+| Item          | Description                                        |
+|---------------|----------------------------------------------------|
+| W37           | Contiguous v128 storage (SIMD perf)                |
+| W38           | Compiler-generated SIMD patterns                   |
+| Phase 18      | Lazy Compilation + CLI Extensions                  |
+| PR #6         | Timeout support (fuel bypass fixed)                |
+| jitSuppressed | Epoch-based check (replaces deadline suppression)  |
 
-## Phase 13 Summary (completed 2026-03-23)
+## Completed Phases (summary)
 
-- **SIMD JIT**: ARM64 NEON 253/256 native, x86 SSE 244/256 native
-- **Benchmarks**: image_blend 4.7x, matrix_mul 1.6x (beats wasmtime!), byte_search 1.2x
-- **Real-world C -msimd128**: 5 benchmarks, box_blur 1.4x, sum_reduce 1.1x SIMD win
-- **Future**: W37 (contiguous v128), W38 (compiler patterns). See checklist.
-
-## Handover Notes
-
-### W35/W36 (resolved, 2026-03-22)
-- W35: ARM64 JIT `emitGlobalSet` ABI clobber + `--interp` + `i32.store16`. Commit 1429f81.
-- W36: Was W35 side-effect. 3 consecutive 50/50 PASS after W35 merge.
+| Phase | Name                                  | Date       |
+|-------|---------------------------------------|------------|
+| 1     | Guard Pages + Module Cache            | 2026-03    |
+| 3     | CI Automation + Documentation         | 2026-03    |
+| 5     | C API + Conditional Compilation       | 2026-03    |
+| 8     | Real-World Coverage + WAT Parity      | 2026-03    |
+| 10    | Quality / Stabilization               | 2026-03    |
+| 11    | Allocator Injection + Embedding       | 2026-03    |
+| 13    | SIMD JIT (NEON + SSE)                 | 2026-03-23 |
+| 15    | Windows Port                          | 2026-03    |
+| 19    | JIT Reliability                       | 2026-03    |
 
 ## References
 

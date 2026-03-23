@@ -3,6 +3,29 @@
 All notable changes to zwasm are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Added
+- SIMD JIT: ARM64 NEON (253/256 native) and x86_64 SSE (244/256 native) (Phase 13)
+- 5 real-world SIMD benchmarks (C -msimd128): grayscale, box_blur, sum_reduce, byte_freq, nbody
+- SIMD benchmark comparison infrastructure (`bench/run_simd_bench.sh`, `bench/simd_comparison.yaml`)
+- JIT fuel check at back-edges: enables timeout support for JIT-compiled code (Phase 19.2)
+- `--interp` CLI flag for interpreter-only execution (debugging/differential testing)
+- Wide-arithmetic validation support (i64.add128, i64.sub128, i64.mul_wide_s/u)
+
+### Fixed
+- ARM64 JIT `emitGlobalSet` ABI clobber: vreg r21 overwritten before reading value (W35)
+- x86_64 wide-arithmetic E2E: 19 tests fixed (validator + Debug i128 build mode)
+- `i32.store16` access size in interpreter
+- `--interp` flag incomplete for `doCallDirectIR` path
+
+### Changed
+- SIMD operations now JIT-compiled (was: stack interpreter only, ~22x slower)
+- SIMD microbenchmarks: image_blend **4.7x**, matrix_mul **1.6x** (beats wasmtime)
+- E2E runner built with ReleaseSafe (fixes x86_64 Debug i128 issues)
+- E2E tests: 792/792 on both Mac and Ubuntu (was 773/792 on Ubuntu)
+- Binary size: 1.23 MB stripped. Memory: ~3.5 MB RSS.
+
 ## [1.3.0] - 2026-03-02
 
 ### Added
@@ -59,9 +82,6 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 - Runtime memory: 3.44 MB RSS (fib benchmark)
 - Benchmark results: 14/23 match or beat wasmtime (up from 13/21, at v1.1.0 time)
 - Updated all documentation with fresh benchmark data
-
-### Known Limitations
-- SIMD operations run on stack interpreter (~22x slower than wasmtime). Planned: RegIR v128 extension + selective JIT NEON/SSE.
 
 ## [1.0.0] - 2026-02-17
 

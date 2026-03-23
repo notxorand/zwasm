@@ -8,7 +8,7 @@ A standalone WebAssembly runtime written in Zig. Runs Wasm modules as a CLI tool
 - **62,263 spec tests passing**: 100% on macOS ARM64 and Linux x86_64
 - **4-tier execution**: Interpreter with register IR and ARM64/x86_64 JIT compilation
 - **WASI Preview 1**: 46 syscalls with deny-by-default capability model
-- **Small footprint**: ~1.2 MB binary, ~4.5 MB runtime memory
+- **Small footprint**: ~1.2 MB binary, ~3.5 MB runtime memory
 - **Library and CLI**: Use as a `zig build` dependency or run modules from the command line
 - **WAT support**: Run `.wat` text format files directly
 

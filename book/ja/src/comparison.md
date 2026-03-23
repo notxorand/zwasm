@@ -8,13 +8,13 @@ zwasm と他の WebAssembly ランタイムの比較です。
 |------|-------|----------|-------|--------|
 | 言語 | Zig | Rust | C | Rust/C |
 | バイナリサイズ | 約 1.2 MB | 56 MB | ~100 KB | 30+ MB |
-| メモリ (fib) | 4.5 MB | 12 MB | ~1 MB | 15+ MB |
+| メモリ (fib) | 3.5 MB | 12 MB | ~1 MB | 15+ MB |
 | 実行方式 | Interp + JIT | AOT/JIT | Interpreter | AOT/JIT |
 | Wasm 3.0 | 完全対応 | 完全対応 | 部分対応 | 部分対応 |
 | GC プロポーザル | 対応 | 対応 | 非対応 | 非対応 |
 | SIMD | 完全対応 (256 ops) | 完全対応 | 部分対応 | 完全対応 |
 | WASI | P1 (46 syscalls) | P1 + P2 | P1 (部分的) | P1 + P2 |
-| プラットフォーム | macOS, Linux | macOS, Linux, Windows | 多数 (JIT なし) | macOS, Linux, Windows |
+| プラットフォーム | macOS, Linux, Windows | macOS, Linux, Windows | 多数 (JIT なし) | macOS, Linux, Windows |
 
 ## zwasm を選ぶべきとき
 
@@ -28,9 +28,7 @@ zwasm と他の WebAssembly ランタイムの比較です。
 
 ## 他のランタイムを選ぶべきとき
 
-**最大スループット**: wasmtime の Cranelift AOT コンパイラは高度に最適化されたネイティブコードを生成します。長時間の計算負荷が高いワークロードでは、wasmtime のほうが高速な場合があります。特に SIMD 多用のワークロードでは、zwasm は現在約 22 倍遅くなります（スタックインタプリタ、SIMD JIT 未実装）。
-
-**Windows サポート**: zwasm は現在 macOS と Linux をサポートしています。Windows で使用する場合は wasmtime または wasmer を選択してください。
+**最大スループット**: wasmtime の Cranelift AOT コンパイラは高度に最適化されたネイティブコードを生成します。長時間の計算負荷が高いワークロードでは、wasmtime のほうが高速な場合があります。SIMD マイクロベンチマークは互角（matrix_mul は wasmtime を上回る）ですが、コンパイラ生成の SIMD コードでは split v128 ストレージのオーバーヘッドにより差が大きくなります。
 
 **最小サイズ**: wasm3 は約 100 KB でマイクロコントローラ上でも動作します。JIT なしで最も小さなランタイムが必要な場合は、wasm3 のほうが適しているかもしれません。
 

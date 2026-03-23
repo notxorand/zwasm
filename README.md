@@ -15,24 +15,20 @@ Supported host targets:
 
 ## Why zwasm
 
-> **Note**: zwasm is under active development. Real-world Wasm compatibility
-> testing and benchmark verification are ongoing. The API and behavior may
-> change between releases. Not yet recommended for production use.
+Most Wasm runtimes are either fast but large (wasmtime ~56MB) or small but slow (wasm3 ~0.3MB, interpreter only). zwasm targets the gap between them: **~1.2MB with ARM64 + x86_64 JIT compilation**, including SIMD.
 
-Most Wasm runtimes are either fast but large (wasmtime ~56MB) or small but slow (wasm3 ~0.3MB, interpreter only). zwasm targets the gap between them: **~1.2MB with ARM64 + x86_64 JIT compilation**.
-
-| Runtime  | Binary  | Memory | JIT            |
-|----------|--------:|-------:|----------------|
-| zwasm    | 1.2MB   | ~4.5MB | ARM64 + x86_64 |
-| wasmtime | 56MB    | ~12MB  | Cranelift      |
-| wasm3    | 0.3MB   | ~1MB   | None           |
+| Runtime  | Binary  | Memory | JIT                          |
+|----------|--------:|-------:|------------------------------|
+| zwasm    | 1.2MB   | ~3.5MB | ARM64 + x86_64 (incl. SIMD)  |
+| wasmtime | 56MB    | ~12MB  | Cranelift                    |
+| wasm3    | 0.3MB   | ~1MB   | None                         |
 
 zwasm was extracted from [ClojureWasm](https://github.com/clojurewasm/ClojureWasm) (a Zig reimplementation of Clojure) where optimizing a Wasm subsystem inside a language runtime created a "runtime within runtime" problem. Separating it produced a cleaner codebase, independent optimization, and a reusable library. ClojureWasm remains the primary consumer.
 
 ## Features
 
 - **581+ opcodes**: Full MVP + SIMD (236 + 20 relaxed) + Exception handling + Function references + GC + Threads (79 atomics)
-- **4-tier execution**: bytecode > predecoded IR > register IR > ARM64/x86_64 JIT
+- **4-tier execution**: bytecode > predecoded IR > register IR > ARM64/x86_64 JIT (NEON/SSE SIMD)
 - **100% spec conformance**: 62,263/62,263 spec tests, 792/792 E2E tests, 50 real-world programs (macOS + Linux + Windows x86_64 CI)
 - **All Wasm 3.0 proposals**: See [Spec Coverage](#wasm-spec-coverage) below
 - **Component Model**: WIT parser, Canonical ABI, component linking, WASI P2 adapter
@@ -257,14 +253,14 @@ fall back to the register IR interpreter.
 
 ## Project Philosophy
 
-**Small and fast, not feature-complete.** zwasm prioritizes binary size and
-runtime performance density (performance per byte of binary). It does not
-aim to replace wasmtime for general use. Instead, it targets
-environments where size and startup time matter: embedded systems, edge
-computing, CLI tools, and as an embeddable library in Zig projects.
+**Small and fast.** zwasm prioritizes binary size and runtime performance
+density (performance per byte of binary). It targets environments where
+size and startup time matter: embedded systems, edge computing, CLI tools,
+and as an embeddable library in Zig projects.
 
-**ARM64-first, x86_64 supported.** Primary optimization is still Apple Silicon and ARM64 Linux.
-x86_64 JIT is supported on Linux and Windows.
+**ARM64 + x86_64.** Full JIT support on both architectures including SIMD.
+Primary optimization target is Apple Silicon; x86_64 Linux and Windows
+are equally supported.
 
 **Spec fidelity over expedience.** Correctness comes before performance.
 The spec test suite runs on every change.
