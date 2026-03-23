@@ -49,7 +49,7 @@ Details: `roadmap-archive.md`.
 | Task                       | Priority | Description                                     |
 |----------------------------|----------|-------------------------------------------------|
 | PR #6: Timeout support     | High     | External contributor PR. JIT fuel bypass fixed.  |
-| Epoch-based JIT check      | Medium   | Replace jitSuppressed(deadline) with epoch       |
+| ~~Epoch-based JIT check~~  | Done     | D131: fuel check helper replaces jitSuppressed   |
 | CLI: `zwasm dump`          | Low      | Detailed module inspection                       |
 | CLI: `zwasm bench`         | Low      | Built-in benchmark runner                        |
 | Homebrew formula           | Low      | `brew install clojurewasm/tap/zwasm`             |

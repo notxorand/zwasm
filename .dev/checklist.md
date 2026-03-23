@@ -28,11 +28,8 @@ Prefix: W## (to distinguish from CW's F## items).
   wide-arithmetic ops (i64.add128 etc.) and other multi-value functions fall back
   to predecoded IR interpreter. Extend RegIR to handle multi-value returns.
 
-- [ ] W40: jitSuppressed(deadline) → epoch-based check
-  Currently, setting a deadline suppresses JIT compilation entirely.
-  Epoch-based approach: JIT code checks epoch counter at back-edges,
-  trampoline exits when epoch expires. Enables JIT + timeout coexistence.
-
 ## Resolved (summary)
+
+W40: Resolved — epoch-based JIT timeout (D131). JIT fuel check helper replaces jitSuppressed.
 
 W2-W36: See git history. All resolved through Stages 0-47 and Phases 1-19.
