@@ -1231,6 +1231,91 @@ const Enc = struct {
     // PUNPCKHQDQ: interleave high qwords (for extend_high)
     fn punpckhqdq(buf: *std.ArrayList(u8), alloc: Allocator, dst: u4, src: u4) void { ssePacked(buf, alloc, 0x6D, dst, src); }
 
+    /// CMPPS xmm, xmm, imm8: 0F C2 /r imm8 (no prefix for PS)
+    fn cmpps(buf: *std.ArrayList(u8), alloc: Allocator, dst: u4, src: u4, imm8: u8) void {
+        if (dst >= 8 or src >= 8) {
+            var r: u8 = 0x40;
+            if (dst >= 8) r |= 0x04;
+            if (src >= 8) r |= 0x01;
+            buf.append(alloc, r) catch {};
+        }
+        buf.appendSlice(alloc, &[_]u8{ 0x0F, 0xC2 }) catch {};
+        buf.append(alloc, modrm(3, @truncate(dst), @truncate(src))) catch {};
+        buf.append(alloc, imm8) catch {};
+    }
+    /// CMPPD xmm, xmm, imm8: 66 0F C2 /r imm8
+    fn cmppd(buf: *std.ArrayList(u8), alloc: Allocator, dst: u4, src: u4, imm8: u8) void {
+        buf.append(alloc, 0x66) catch {};
+        if (dst >= 8 or src >= 8) {
+            var r: u8 = 0x40;
+            if (dst >= 8) r |= 0x04;
+            if (src >= 8) r |= 0x01;
+            buf.append(alloc, r) catch {};
+        }
+        buf.appendSlice(alloc, &[_]u8{ 0x0F, 0xC2 }) catch {};
+        buf.append(alloc, modrm(3, @truncate(dst), @truncate(src))) catch {};
+        buf.append(alloc, imm8) catch {};
+    }
+
+    /// ROUNDPS xmm, xmm, imm8 (SSE4.1): 66 0F 3A 08 /r imm8
+    fn roundps(buf: *std.ArrayList(u8), alloc: Allocator, dst: u4, src: u4, imm8: u8) void { sse41OpImm2(buf, alloc, 0x08, dst, src, imm8); }
+    /// ROUNDPD xmm, xmm, imm8 (SSE4.1): 66 0F 3A 09 /r imm8
+    fn roundpd(buf: *std.ArrayList(u8), alloc: Allocator, dst: u4, src: u4, imm8: u8) void { sse41OpImm2(buf, alloc, 0x09, dst, src, imm8); }
+    /// Helper for SSE4.1 ops with xmm,xmm,imm8: 66 [REX] 0F 3A op ModRM imm8
+    fn sse41OpImm2(buf: *std.ArrayList(u8), alloc: Allocator, op: u8, dst: u4, src: u4, imm8: u8) void {
+        buf.append(alloc, 0x66) catch {};
+        if (dst >= 8 or src >= 8) {
+            var r: u8 = 0x40;
+            if (dst >= 8) r |= 0x04;
+            if (src >= 8) r |= 0x01;
+            buf.append(alloc, r) catch {};
+        }
+        buf.appendSlice(alloc, &[_]u8{ 0x0F, 0x3A, op }) catch {};
+        buf.append(alloc, modrm(3, @truncate(dst), @truncate(src))) catch {};
+        buf.append(alloc, imm8) catch {};
+    }
+
+    /// PTEST xmm, xmm (SSE4.1): 66 0F 38 17 /r — sets ZF if (a AND b) == 0
+    fn ptest(buf: *std.ArrayList(u8), alloc: Allocator, a: u4, b: u4) void { sse41Op(buf, alloc, 0x17, a, b); }
+
+    /// PMOVMSKB r32, xmm: 66 0F D7 /r
+    fn pmovmskb(buf: *std.ArrayList(u8), alloc: Allocator, gpr: Reg, xmm: u4) void {
+        buf.append(alloc, 0x66) catch {};
+        var r: u8 = 0x40;
+        if (gpr.isExt()) r |= 0x04; // REX.R for gpr
+        if (xmm >= 8) r |= 0x01; // REX.B for xmm
+        if (r != 0x40) buf.append(alloc, r) catch {};
+        buf.appendSlice(alloc, &[_]u8{ 0x0F, 0xD7 }) catch {};
+        buf.append(alloc, modrm(3, gpr.low3(), @truncate(xmm))) catch {};
+    }
+
+    /// PSHUFB xmm, xmm (SSSE3): 66 0F 38 00 /r
+    fn pshufb(buf: *std.ArrayList(u8), alloc: Allocator, dst: u4, src: u4) void { sse41Op(buf, alloc, 0x00, dst, src); }
+
+    /// MOVMSKPS r32, xmm: 0F 50 /r (extract sign bits of 4 floats)
+    fn movmskps(buf: *std.ArrayList(u8), alloc: Allocator, gpr: Reg, xmm: u4) void {
+        if (gpr.isExt() or xmm >= 8) {
+            var r: u8 = 0x40;
+            if (gpr.isExt()) r |= 0x04;
+            if (xmm >= 8) r |= 0x01;
+            buf.append(alloc, r) catch {};
+        }
+        buf.appendSlice(alloc, &[_]u8{ 0x0F, 0x50 }) catch {};
+        buf.append(alloc, modrm(3, gpr.low3(), @truncate(xmm))) catch {};
+    }
+    /// MOVMSKPD r32, xmm: 66 0F 50 /r
+    fn movmskpd(buf: *std.ArrayList(u8), alloc: Allocator, gpr: Reg, xmm: u4) void {
+        buf.append(alloc, 0x66) catch {};
+        if (gpr.isExt() or xmm >= 8) {
+            var r: u8 = 0x40;
+            if (gpr.isExt()) r |= 0x04;
+            if (xmm >= 8) r |= 0x01;
+            buf.append(alloc, r) catch {};
+        }
+        buf.appendSlice(alloc, &[_]u8{ 0x0F, 0x50 }) catch {};
+        buf.append(alloc, modrm(3, gpr.low3(), @truncate(xmm))) catch {};
+    }
+
     /// CVTSI2SD xmm, r64: F2 REX.W 0F 2A /r (signed i64 → f64)
     fn cvtsi2sd64(buf: *std.ArrayList(u8), alloc: Allocator, xmm: u4, gpr: Reg) void {
         buf.append(alloc, 0xF2) catch {};
@@ -4202,6 +4287,207 @@ pub const Compiler = struct {
             // --- convert ---
             0xFA => { self.emitSimdUnarySse(instr, &Enc.cvtdq2ps); return true; }, // f32x4.convert_i32x4_s
             0xF8 => { self.emitSimdUnarySse(instr, &Enc.cvttps2dq); return true; }, // i32x4.trunc_sat_f32x4_s
+
+            // --- f32x4 comparisons (CMPPS imm8) ---
+            // imm8: 0=EQ, 1=LT, 2=LE, 4=NE (unordered), 5=NLT (>=), 6=NLE (>)
+            0x41 => { // f32x4.eq
+                self.emitLoadV128(SIMD_SCRATCH0, instr.rs1);
+                self.emitLoadV128(SIMD_SCRATCH1, instr.rs2_field);
+                Enc.cmpps(&self.code, self.alloc, SIMD_SCRATCH0, SIMD_SCRATCH1, 0); // EQ
+                self.emitStoreV128(SIMD_SCRATCH0, instr.rd);
+                return true;
+            },
+            0x42 => { // f32x4.ne
+                self.emitLoadV128(SIMD_SCRATCH0, instr.rs1);
+                self.emitLoadV128(SIMD_SCRATCH1, instr.rs2_field);
+                Enc.cmpps(&self.code, self.alloc, SIMD_SCRATCH0, SIMD_SCRATCH1, 4); // NEQ
+                self.emitStoreV128(SIMD_SCRATCH0, instr.rd);
+                return true;
+            },
+            0x43 => { // f32x4.lt
+                self.emitLoadV128(SIMD_SCRATCH0, instr.rs1);
+                self.emitLoadV128(SIMD_SCRATCH1, instr.rs2_field);
+                Enc.cmpps(&self.code, self.alloc, SIMD_SCRATCH0, SIMD_SCRATCH1, 1); // LT
+                self.emitStoreV128(SIMD_SCRATCH0, instr.rd);
+                return true;
+            },
+            0x44 => { // f32x4.gt = swap + LT
+                self.emitLoadV128(SIMD_SCRATCH0, instr.rs2_field);
+                self.emitLoadV128(SIMD_SCRATCH1, instr.rs1);
+                Enc.cmpps(&self.code, self.alloc, SIMD_SCRATCH0, SIMD_SCRATCH1, 1);
+                self.emitStoreV128(SIMD_SCRATCH0, instr.rd);
+                return true;
+            },
+            0x45 => { // f32x4.le
+                self.emitLoadV128(SIMD_SCRATCH0, instr.rs1);
+                self.emitLoadV128(SIMD_SCRATCH1, instr.rs2_field);
+                Enc.cmpps(&self.code, self.alloc, SIMD_SCRATCH0, SIMD_SCRATCH1, 2); // LE
+                self.emitStoreV128(SIMD_SCRATCH0, instr.rd);
+                return true;
+            },
+            0x46 => { // f32x4.ge = swap + LE
+                self.emitLoadV128(SIMD_SCRATCH0, instr.rs2_field);
+                self.emitLoadV128(SIMD_SCRATCH1, instr.rs1);
+                Enc.cmpps(&self.code, self.alloc, SIMD_SCRATCH0, SIMD_SCRATCH1, 2);
+                self.emitStoreV128(SIMD_SCRATCH0, instr.rd);
+                return true;
+            },
+
+            // --- f64x2 comparisons (CMPPD imm8) ---
+            0x47 => { // f64x2.eq
+                self.emitLoadV128(SIMD_SCRATCH0, instr.rs1);
+                self.emitLoadV128(SIMD_SCRATCH1, instr.rs2_field);
+                Enc.cmppd(&self.code, self.alloc, SIMD_SCRATCH0, SIMD_SCRATCH1, 0);
+                self.emitStoreV128(SIMD_SCRATCH0, instr.rd);
+                return true;
+            },
+            0x48 => { // f64x2.ne
+                self.emitLoadV128(SIMD_SCRATCH0, instr.rs1);
+                self.emitLoadV128(SIMD_SCRATCH1, instr.rs2_field);
+                Enc.cmppd(&self.code, self.alloc, SIMD_SCRATCH0, SIMD_SCRATCH1, 4);
+                self.emitStoreV128(SIMD_SCRATCH0, instr.rd);
+                return true;
+            },
+            0x49 => { // f64x2.lt
+                self.emitLoadV128(SIMD_SCRATCH0, instr.rs1);
+                self.emitLoadV128(SIMD_SCRATCH1, instr.rs2_field);
+                Enc.cmppd(&self.code, self.alloc, SIMD_SCRATCH0, SIMD_SCRATCH1, 1);
+                self.emitStoreV128(SIMD_SCRATCH0, instr.rd);
+                return true;
+            },
+            0x4A => { // f64x2.gt = swap + LT
+                self.emitLoadV128(SIMD_SCRATCH0, instr.rs2_field);
+                self.emitLoadV128(SIMD_SCRATCH1, instr.rs1);
+                Enc.cmppd(&self.code, self.alloc, SIMD_SCRATCH0, SIMD_SCRATCH1, 1);
+                self.emitStoreV128(SIMD_SCRATCH0, instr.rd);
+                return true;
+            },
+            0x4B => { // f64x2.le
+                self.emitLoadV128(SIMD_SCRATCH0, instr.rs1);
+                self.emitLoadV128(SIMD_SCRATCH1, instr.rs2_field);
+                Enc.cmppd(&self.code, self.alloc, SIMD_SCRATCH0, SIMD_SCRATCH1, 2);
+                self.emitStoreV128(SIMD_SCRATCH0, instr.rd);
+                return true;
+            },
+            0x4C => { // f64x2.ge = swap + LE
+                self.emitLoadV128(SIMD_SCRATCH0, instr.rs2_field);
+                self.emitLoadV128(SIMD_SCRATCH1, instr.rs1);
+                Enc.cmppd(&self.code, self.alloc, SIMD_SCRATCH0, SIMD_SCRATCH1, 2);
+                self.emitStoreV128(SIMD_SCRATCH0, instr.rd);
+                return true;
+            },
+
+            // --- rounding (SSE4.1 ROUNDPS/PD) ---
+            // imm8: 0=nearest, 1=floor, 2=ceil, 3=trunc
+            0x67 => { // f32x4.ceil
+                self.emitLoadV128(SIMD_SCRATCH0, instr.rs1);
+                Enc.roundps(&self.code, self.alloc, SIMD_SCRATCH0, SIMD_SCRATCH0, 2);
+                self.emitStoreV128(SIMD_SCRATCH0, instr.rd);
+                return true;
+            },
+            0x68 => { // f32x4.floor
+                self.emitLoadV128(SIMD_SCRATCH0, instr.rs1);
+                Enc.roundps(&self.code, self.alloc, SIMD_SCRATCH0, SIMD_SCRATCH0, 1);
+                self.emitStoreV128(SIMD_SCRATCH0, instr.rd);
+                return true;
+            },
+            0x69 => { // f32x4.trunc
+                self.emitLoadV128(SIMD_SCRATCH0, instr.rs1);
+                Enc.roundps(&self.code, self.alloc, SIMD_SCRATCH0, SIMD_SCRATCH0, 3);
+                self.emitStoreV128(SIMD_SCRATCH0, instr.rd);
+                return true;
+            },
+            0x6A => { // f32x4.nearest
+                self.emitLoadV128(SIMD_SCRATCH0, instr.rs1);
+                Enc.roundps(&self.code, self.alloc, SIMD_SCRATCH0, SIMD_SCRATCH0, 0);
+                self.emitStoreV128(SIMD_SCRATCH0, instr.rd);
+                return true;
+            },
+            0x74 => { // f64x2.ceil
+                self.emitLoadV128(SIMD_SCRATCH0, instr.rs1);
+                Enc.roundpd(&self.code, self.alloc, SIMD_SCRATCH0, SIMD_SCRATCH0, 2);
+                self.emitStoreV128(SIMD_SCRATCH0, instr.rd);
+                return true;
+            },
+            0x75 => { // f64x2.floor
+                self.emitLoadV128(SIMD_SCRATCH0, instr.rs1);
+                Enc.roundpd(&self.code, self.alloc, SIMD_SCRATCH0, SIMD_SCRATCH0, 1);
+                self.emitStoreV128(SIMD_SCRATCH0, instr.rd);
+                return true;
+            },
+            0x7A => { // f64x2.trunc
+                self.emitLoadV128(SIMD_SCRATCH0, instr.rs1);
+                Enc.roundpd(&self.code, self.alloc, SIMD_SCRATCH0, SIMD_SCRATCH0, 3);
+                self.emitStoreV128(SIMD_SCRATCH0, instr.rd);
+                return true;
+            },
+            0x94 => { // f64x2.nearest
+                self.emitLoadV128(SIMD_SCRATCH0, instr.rs1);
+                Enc.roundpd(&self.code, self.alloc, SIMD_SCRATCH0, SIMD_SCRATCH0, 0);
+                self.emitStoreV128(SIMD_SCRATCH0, instr.rd);
+                return true;
+            },
+
+            // --- v128.any_true (PTEST) ---
+            0x53 => {
+                self.emitLoadV128(SIMD_SCRATCH0, instr.rs1);
+                Enc.ptest(&self.code, self.alloc, SIMD_SCRATCH0, SIMD_SCRATCH0); // ZF=1 if all zero
+                const d = vregToPhys(instr.rd) orelse SCRATCH;
+                // SETNZ d (ZF=0 means non-zero → any_true=1)
+                Enc.setcc(&self.code, self.alloc, .ne, d);
+                Enc.movzxByte(&self.code, self.alloc, d, d); // zero-extend byte to 64-bit
+                self.storeVreg(instr.rd, d);
+                return true;
+            },
+
+            // --- i8x16.bitmask (PMOVMSKB) ---
+            0x64 => {
+                self.emitLoadV128(SIMD_SCRATCH0, instr.rs1);
+                const d = vregToPhys(instr.rd) orelse SCRATCH;
+                Enc.pmovmskb(&self.code, self.alloc, d, SIMD_SCRATCH0);
+                self.storeVreg(instr.rd, d);
+                return true;
+            },
+            // --- i32x4.bitmask (MOVMSKPS) ---
+            0xA4 => {
+                self.emitLoadV128(SIMD_SCRATCH0, instr.rs1);
+                const d = vregToPhys(instr.rd) orelse SCRATCH;
+                Enc.movmskps(&self.code, self.alloc, d, SIMD_SCRATCH0);
+                self.storeVreg(instr.rd, d);
+                return true;
+            },
+            // --- i64x2.bitmask (MOVMSKPD) ---
+            0xC4 => {
+                self.emitLoadV128(SIMD_SCRATCH0, instr.rs1);
+                const d = vregToPhys(instr.rd) orelse SCRATCH;
+                Enc.movmskpd(&self.code, self.alloc, d, SIMD_SCRATCH0);
+                self.storeVreg(instr.rd, d);
+                return true;
+            },
+
+            // --- i8x16.swizzle (PSHUFB) ---
+            0x0E => {
+                self.emitLoadV128(SIMD_SCRATCH0, instr.rs1); // table
+                self.emitLoadV128(SIMD_SCRATCH1, instr.rs2_field); // indices
+                Enc.pshufb(&self.code, self.alloc, SIMD_SCRATCH0, SIMD_SCRATCH1);
+                self.emitStoreV128(SIMD_SCRATCH0, instr.rd);
+                return true;
+            },
+
+            // --- v128.bitselect (PAND+PANDN+POR, uses 3 XMM regs) ---
+            0x52 => {
+                // bitselect(v1, v2, mask): mask from trailing NOP rd
+                self.emitLoadV128(SIMD_SCRATCH1, instr.rs1); // v1 → XMM4
+                const SIMD_SCRATCH2_X: u4 = 5; // XMM5 as third scratch
+                self.emitLoadV128(SIMD_SCRATCH2_X, instr.rs2_field); // v2 → XMM5
+                self.emitLoadV128(SIMD_SCRATCH0, extra); // mask → XMM3
+                // result = (v1 AND mask) OR (v2 AND NOT mask)
+                Enc.pand(&self.code, self.alloc, SIMD_SCRATCH1, SIMD_SCRATCH0); // v1 AND mask
+                Enc.pandn(&self.code, self.alloc, SIMD_SCRATCH0, SIMD_SCRATCH2_X); // NOT(mask) AND v2
+                Enc.por(&self.code, self.alloc, SIMD_SCRATCH0, SIMD_SCRATCH1); // combine
+                self.emitStoreV128(SIMD_SCRATCH0, instr.rd);
+                return true;
+            },
 
             else => return false,
         }
