@@ -1053,6 +1053,18 @@ const Enc = struct {
     fn psubd(buf: *std.ArrayList(u8), alloc: Allocator, dst: u4, src: u4) void { ssePacked(buf, alloc, 0xFA, dst, src); }
     fn psubq(buf: *std.ArrayList(u8), alloc: Allocator, dst: u4, src: u4) void { ssePacked(buf, alloc, 0xFB, dst, src); }
     fn pmullw(buf: *std.ArrayList(u8), alloc: Allocator, dst: u4, src: u4) void { ssePacked(buf, alloc, 0xD5, dst, src); }
+    /// PMULLD (SSE4.1): 66 0F 38 40 /r
+    fn pmulld(buf: *std.ArrayList(u8), alloc: Allocator, dst: u4, src: u4) void {
+        buf.append(alloc, 0x66) catch {};
+        if (dst >= 8 or src >= 8) {
+            var r: u8 = 0x40;
+            if (dst >= 8) r |= 0x04;
+            if (src >= 8) r |= 0x01;
+            buf.append(alloc, r) catch {};
+        }
+        buf.appendSlice(alloc, &[_]u8{ 0x0F, 0x38, 0x40 }) catch {};
+        buf.append(alloc, modrm(3, @truncate(dst), @truncate(src))) catch {};
+    }
     fn pand(buf: *std.ArrayList(u8), alloc: Allocator, dst: u4, src: u4) void { ssePacked(buf, alloc, 0xDB, dst, src); }
     fn pandn(buf: *std.ArrayList(u8), alloc: Allocator, dst: u4, src: u4) void { ssePacked(buf, alloc, 0xDF, dst, src); }
     fn por(buf: *std.ArrayList(u8), alloc: Allocator, dst: u4, src: u4) void { ssePacked(buf, alloc, 0xEB, dst, src); }
@@ -3471,13 +3483,103 @@ pub const Compiler = struct {
     }
 
     /// Try to emit native SSE for a SIMD opcode. Returns true if handled.
+    /// Emit native SSE binary op: load rs1 → XMM3, load rs2 → XMM4, op XMM3,XMM4, store → rd.
+    fn emitSimdBinarySse(self: *Compiler, instr: RegInstr, encodeFn: *const fn (*std.ArrayList(u8), Allocator, u4, u4) void) void {
+        self.emitLoadV128(SIMD_SCRATCH0, instr.rs1);
+        self.emitLoadV128(SIMD_SCRATCH1, instr.rs2_field);
+        encodeFn(&self.code, self.alloc, SIMD_SCRATCH0, SIMD_SCRATCH1);
+        self.emitStoreV128(SIMD_SCRATCH0, instr.rd);
+    }
+
+    /// Emit native SSE unary op: load rs1 → XMM3, op XMM3,XMM3, store → rd.
+    fn emitSimdUnarySse(self: *Compiler, instr: RegInstr, encodeFn: *const fn (*std.ArrayList(u8), Allocator, u4, u4) void) void {
+        self.emitLoadV128(SIMD_SCRATCH0, instr.rs1);
+        encodeFn(&self.code, self.alloc, SIMD_SCRATCH0, SIMD_SCRATCH0);
+        self.emitStoreV128(SIMD_SCRATCH0, instr.rd);
+    }
+
     fn emitSimdNative(self: *Compiler, instr: RegInstr, ir: []const RegInstr, pc: *u32) bool {
-        _ = self;
-        _ = instr;
-        _ = ir;
-        _ = pc;
-        // TODO: add native SSE ops incrementally
-        return false;
+        const sub: u32 = instr.op - predecode_mod.SIMD_BASE;
+
+        // Peek at trailing NOP for extra metadata (lane index etc.)
+        var extra: u16 = 0;
+        const has_nop = pc.* < ir.len and ir[pc.*].op == regalloc_mod.OP_NOP;
+        if (has_nop) extra = ir[pc.*].rd;
+
+        const handled = self.emitSimdNativeX86(instr, sub, extra);
+        if (handled and has_nop) pc.* += 1;
+        return handled;
+    }
+
+    fn emitSimdNativeX86(self: *Compiler, instr: RegInstr, sub: u32, extra: u16) bool {
+        _ = extra;
+        switch (sub) {
+            // --- v128 bitwise ---
+            0x4E => { self.emitSimdBinarySse(instr, &Enc.pand); return true; }, // v128.and
+            0x4F => { // v128.andnot — PANDN (dst = NOT dst AND src, need swap)
+                self.emitLoadV128(SIMD_SCRATCH0, instr.rs2_field); // src2 → XMM3 (will be NOTted)
+                self.emitLoadV128(SIMD_SCRATCH1, instr.rs1); // src1 → XMM4
+                Enc.pandn(&self.code, self.alloc, SIMD_SCRATCH0, SIMD_SCRATCH1); // XMM3 = NOT(XMM3) AND XMM4
+                self.emitStoreV128(SIMD_SCRATCH0, instr.rd);
+                return true;
+            },
+            0x50 => { self.emitSimdBinarySse(instr, &Enc.por); return true; }, // v128.or
+            0x51 => { self.emitSimdBinarySse(instr, &Enc.pxor); return true; }, // v128.xor
+            0x4D => { // v128.not — PXOR with all-ones (PCMPEQD self,self = all-ones, then PXOR)
+                self.emitLoadV128(SIMD_SCRATCH0, instr.rs1);
+                // Generate all-ones in XMM4: PCMPEQD XMM4, XMM4
+                Enc.pcmpeqd(&self.code, self.alloc, SIMD_SCRATCH1, SIMD_SCRATCH1);
+                Enc.pxor(&self.code, self.alloc, SIMD_SCRATCH0, SIMD_SCRATCH1);
+                self.emitStoreV128(SIMD_SCRATCH0, instr.rd);
+                return true;
+            },
+
+            // --- i8x16 arithmetic ---
+            0x6E => { self.emitSimdBinarySse(instr, &Enc.paddb); return true; }, // i8x16.add
+            0x71 => { self.emitSimdBinarySse(instr, &Enc.psubb); return true; }, // i8x16.sub
+
+            // --- i16x8 arithmetic ---
+            0x8E => { self.emitSimdBinarySse(instr, &Enc.paddw); return true; }, // i16x8.add
+            0x91 => { self.emitSimdBinarySse(instr, &Enc.psubw); return true; }, // i16x8.sub
+            0x95 => { self.emitSimdBinarySse(instr, &Enc.pmullw); return true; }, // i16x8.mul
+
+            // --- i32x4 arithmetic ---
+            0xAE => { self.emitSimdBinarySse(instr, &Enc.paddd); return true; }, // i32x4.add
+            0xB1 => { self.emitSimdBinarySse(instr, &Enc.psubd); return true; }, // i32x4.sub
+            0xB5 => { self.emitSimdBinarySse(instr, &Enc.pmulld); return true; }, // i32x4.mul (SSE4.1)
+
+            // --- i64x2 arithmetic ---
+            0xCE => { self.emitSimdBinarySse(instr, &Enc.paddq); return true; }, // i64x2.add
+            0xD1 => { self.emitSimdBinarySse(instr, &Enc.psubq); return true; }, // i64x2.sub
+
+            // --- f32x4 arithmetic ---
+            0xE4 => { self.emitSimdBinarySse(instr, &Enc.addps); return true; }, // f32x4.add
+            0xE5 => { self.emitSimdBinarySse(instr, &Enc.subps); return true; }, // f32x4.sub
+            0xE6 => { self.emitSimdBinarySse(instr, &Enc.mulps); return true; }, // f32x4.mul
+            0xE7 => { self.emitSimdBinarySse(instr, &Enc.divps); return true; }, // f32x4.div
+            0xE3 => { self.emitSimdUnarySse(instr, &Enc.sqrtps); return true; }, // f32x4.sqrt
+
+            // --- f64x2 arithmetic ---
+            0xF0 => { self.emitSimdBinarySse(instr, &Enc.addpd); return true; }, // f64x2.add
+            0xF1 => { self.emitSimdBinarySse(instr, &Enc.subpd); return true; }, // f64x2.sub
+            0xF2 => { self.emitSimdBinarySse(instr, &Enc.mulpd); return true; }, // f64x2.mul
+            0xF3 => { self.emitSimdBinarySse(instr, &Enc.divpd); return true; }, // f64x2.div
+            0xEF => { self.emitSimdUnarySse(instr, &Enc.sqrtpd); return true; }, // f64x2.sqrt
+
+            // --- i32x4 comparisons ---
+            0x37 => { self.emitSimdBinarySse(instr, &Enc.pcmpeqd); return true; }, // i32x4.eq
+            0x3B => { self.emitSimdBinarySse(instr, &Enc.pcmpgtd); return true; }, // i32x4.gt_s
+
+            // --- i8x16 comparisons ---
+            0x23 => { self.emitSimdBinarySse(instr, &Enc.pcmpeqb); return true; }, // i8x16.eq
+            0x27 => { self.emitSimdBinarySse(instr, &Enc.pcmpgtb); return true; }, // i8x16.gt_s
+
+            // --- i16x8 comparisons ---
+            0x2D => { self.emitSimdBinarySse(instr, &Enc.pcmpeqw); return true; }, // i16x8.eq
+            0x31 => { self.emitSimdBinarySse(instr, &Enc.pcmpgtw); return true; }, // i16x8.gt_s
+
+            else => return false,
+        }
     }
 
     /// Emit SIMD trampoline: spill → set up C ABI args → CALL jitSimdTrampoline → check → reload.
