@@ -18,43 +18,24 @@ Session handover document. Read at session start.
 
 ### Status
 
-- **13.0 DONE**: simdStackEffect table, simd_arm64/x86.zig stubs
-- **13.1 DONE**: All 252 SIMD opcodes flow through RegIR via stack adapter
-  - v128 storage: lo in regs[rd], hi in Vm.simd_hi[rd]
-  - OP_MOV/CONST now copy/clear simd_hi (bug: upper 64-bit loss, fixed)
-  - Spec: 62,263/62,263. SIMD conformance: 3/3. Real-world samples: 6/6 correct.
-- **13.2 DONE (trampoline)**: JIT accepts SIMD functions
-  - simd_hi moved from stack-local to Vm struct (JIT accessible via @offsetOf)
-  - ARM64 NEON instruction encoders added (ldrQ/strQ, faddV4s, fmulV4s, etc.)
-  - SIMD opcodes in JIT: trampoline → jitSimdTrampoline → executeSimdIR
-  - SIMD bench: 19-30x slower than scalar (trampoline overhead, was 20-53x)
-  - All tests + samples pass. JIT compiles SIMD hot loops.
-- **5 real-world SIMD C samples** in test/realworld/c_simd/ (wasi-sdk -msimd128)
-- **13.2+ Native NEON** (in progress): **208 opcodes** now native ARM64 (81% of 256)
-  - All comparisons, arithmetic, saturating, shifts, lane ops, extend/narrow, extmul
-  - All float ops (arithmetic, compare, rounding, sqrt, min/max, pmin/pmax, convert)
-  - bitselect, swizzle, popcnt, extadd_pairwise, q15mulr, avgr_u
-  - v128.any_true, all_true (i8x16/i16x8/i32x4/i64x2), i32x4.dot_i16x8_s
-  - v128.load/store/const, splat, bitwise, demote/promote, f64x2 convert
-  - SIMD bench: image_blend 5.2x faster than scalar, matrix_mul 1.4x
-  - **Remaining** (~21 ops): shuffle (1), relaxed ops (20) — all trampoline-safe
-- **13.3 x86 SSE port** (in progress, branch `phase13/simd-jit`)
-  - Foundation DONE: simd_hi_offset, has_simd, SSE encoders, emitLoadV128/StoreV128
-  - SIMD trampoline DONE: all SIMD functions JIT-accepted on x86 (trampoline fallback)
-  - OP_MOV/CONST simd_hi handling DONE
-  - **~212 native SSE opcodes** (83%, 92% of non-relaxed):
-    all comparisons (signed+unsigned), all arithmetic/sat/min/max/abs/neg/avgr,
-    f32x4/f64x2 full (arith/sqrt/min/max/rounding/abs/neg/pmin/pmax/compare),
-    v128 load/store/const, all lane ops, load/store lane, load splat/zero/extend,
-    splat, extend/narrow, shift, convert, demote/promote, bitmask, swizzle,
-    bitselect, any/all_true, dot, q15mulr
-  - Ubuntu x86_64: 62,263/62,263 spec tests pass
-  - ARM64: **253/256 native** (98.8%), trampoline: relaxed_dot (2), one relaxed_laneselect
-  - x86: **244/256 native** (95.3%), trampoline: byte shift (3), popcnt (1),
+- **13.0-13.2 DONE**: RegIR SIMD adapter, v128 split storage, JIT trampoline
+- **13.2+ DONE — ARM64 NEON**: **253/256 native (98.8%)**
+  - All arithmetic, comparisons, shifts, extend/narrow, extmul, convert, rounding
+  - All lane/load/store ops, shuffle (TBL), bitselect, swizzle, bitmask, any/all_true
+  - Relaxed: madd/nmadd (FMLA/FMLS), laneselect (BSL), q15mulr, trunc, min/max
+  - Trampoline only: relaxed_dot (2 ops), relaxed_laneselect (1 op) — ternary ops
+  - SIMD bench (Mac): image_blend **5.5x**, matrix_mul **1.8x** faster than scalar
+- **13.3 DONE — x86 SSE**: **244/256 native (95.3%)**
+  - Same coverage as ARM64 except: i8x16 byte shift (3), popcnt (1),
     i64x2.shr_s (1), unsigned trunc/convert (5), relaxed_dot (2)
-  - **Phase 13.7 TODO**: SIMD real-world benchmark expansion, wasmtime comparison,
-    README + docs + book update
-  - **Long-term**: NEON register allocator or contiguous v128 storage
+  - SSE4.1 minimum. v128 via PINSRQ/PEXTRQ. SysV + Windows ABI trampoline.
+  - Ubuntu x86_64: 62,263/62,263 spec tests pass
+- **Phase 13.7 TODO** (next session):
+  1. Real-world SIMD benchmark expansion (Emscripten/Rust wasm, non-toy programs)
+  2. wasmtime comparison: precise timing on identical workloads
+  3. README + docs + book full update
+  4. Phase 13.8 gate check → v2.0.0 candidate
+- **Long-term**: NEON register allocator or contiguous v128 storage (gap closure)
 - See `@./.dev/roadmap.md` Phase 13 for step breakdown (13.0-13.8)
 
 ### Key Design (D130)
