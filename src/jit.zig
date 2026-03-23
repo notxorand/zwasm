@@ -647,7 +647,7 @@ const a64 = struct {
         return 0x53007C00 | (@as(u32, shift) << 16) | (@as(u32, wn) << 5) | wd;
     }
 
-    // --- NEON/AdvSIMD (for popcnt) ---
+    // --- NEON/AdvSIMD ---
 
     /// CNT V<d>.8B, V<n>.8B — count set bits per byte (8-bit lanes)
     fn cntV8b(vd: u5, vn: u5) u32 {
@@ -657,6 +657,93 @@ const a64 = struct {
     /// ADDV Bd, V<n>.8B — add across vector (sum all bytes into scalar)
     fn addvB(vd: u5, vn: u5) u32 {
         return 0x0E31B800 | (@as(u32, vn) << 5) | vd;
+    }
+
+    // --- NEON v128 (128-bit SIMD) ---
+
+    /// LDR Qt, [Xn, #imm] — load 128-bit vector, unsigned offset (imm is byte offset / 16)
+    fn ldrQ(qt: u5, xn: u5, imm_div16: u12) u32 {
+        return 0x3DC00000 | (@as(u32, imm_div16) << 10) | (@as(u32, xn) << 5) | qt;
+    }
+
+    /// STR Qt, [Xn, #imm] — store 128-bit vector, unsigned offset (imm is byte offset / 16)
+    fn strQ(qt: u5, xn: u5, imm_div16: u12) u32 {
+        return 0x3D800000 | (@as(u32, imm_div16) << 10) | (@as(u32, xn) << 5) | qt;
+    }
+
+    /// LDR Qt, [Xn, Xm] — load 128-bit vector, register offset
+    fn ldrQreg(qt: u5, xn: u5, xm: u5) u32 {
+        return 0x3CE06800 | (@as(u32, xm) << 16) | (@as(u32, xn) << 5) | qt;
+    }
+
+    /// STR Qt, [Xn, Xm] — store 128-bit vector, register offset
+    fn strQreg(qt: u5, xn: u5, xm: u5) u32 {
+        return 0x3CA06800 | (@as(u32, xm) << 16) | (@as(u32, xn) << 5) | qt;
+    }
+
+    /// MOVI Vd.2D, #0 — zero 128-bit vector
+    fn moviV2d_zero(vd: u5) u32 {
+        return 0x6F00E400 | @as(u32, vd);
+    }
+
+    /// FADD Vd.4S, Vn.4S, Vm.4S — f32x4 add
+    fn faddV4s(vd: u5, vn: u5, vm: u5) u32 {
+        return 0x4E20D400 | (@as(u32, vm) << 16) | (@as(u32, vn) << 5) | vd;
+    }
+
+    /// FSUB Vd.4S, Vn.4S, Vm.4S — f32x4 sub
+    fn fsubV4s(vd: u5, vn: u5, vm: u5) u32 {
+        return 0x4EA0D400 | (@as(u32, vm) << 16) | (@as(u32, vn) << 5) | vd;
+    }
+
+    /// FMUL Vd.4S, Vn.4S, Vm.4S — f32x4 mul
+    fn fmulV4s(vd: u5, vn: u5, vm: u5) u32 {
+        return 0x6E20DC00 | (@as(u32, vm) << 16) | (@as(u32, vn) << 5) | vd;
+    }
+
+    /// FDIV Vd.4S, Vn.4S, Vm.4S — f32x4 div
+    fn fdivV4s(vd: u5, vn: u5, vm: u5) u32 {
+        return 0x6E20FC00 | (@as(u32, vm) << 16) | (@as(u32, vn) << 5) | vd;
+    }
+
+    /// ADD Vd.4S, Vn.4S, Vm.4S — i32x4 add
+    fn addV4s(vd: u5, vn: u5, vm: u5) u32 {
+        return 0x4EA08400 | (@as(u32, vm) << 16) | (@as(u32, vn) << 5) | vd;
+    }
+
+    /// SUB Vd.4S, Vn.4S, Vm.4S — i32x4 sub
+    fn subV4s(vd: u5, vn: u5, vm: u5) u32 {
+        return 0x6EA08400 | (@as(u32, vm) << 16) | (@as(u32, vn) << 5) | vd;
+    }
+
+    /// FADD Vd.2D, Vn.2D, Vm.2D — f64x2 add
+    fn faddV2d(vd: u5, vn: u5, vm: u5) u32 {
+        return 0x4E60D400 | (@as(u32, vm) << 16) | (@as(u32, vn) << 5) | vd;
+    }
+
+    /// FMUL Vd.2D, Vn.2D, Vm.2D — f64x2 mul
+    fn fmulV2d(vd: u5, vn: u5, vm: u5) u32 {
+        return 0x6E60DC00 | (@as(u32, vm) << 16) | (@as(u32, vn) << 5) | vd;
+    }
+
+    /// ORR Vd.16B, Vn.16B, Vm.16B — bitwise OR (v128.or)
+    fn orrV16b(vd: u5, vn: u5, vm: u5) u32 {
+        return 0x4EA01C00 | (@as(u32, vm) << 16) | (@as(u32, vn) << 5) | vd;
+    }
+
+    /// AND Vd.16B, Vn.16B, Vm.16B — bitwise AND (v128.and)
+    fn andV16b(vd: u5, vn: u5, vm: u5) u32 {
+        return 0x4E201C00 | (@as(u32, vm) << 16) | (@as(u32, vn) << 5) | vd;
+    }
+
+    /// EOR Vd.16B, Vn.16B, Vm.16B — bitwise XOR (v128.xor)
+    fn eorV16b(vd: u5, vn: u5, vm: u5) u32 {
+        return 0x6E201C00 | (@as(u32, vm) << 16) | (@as(u32, vn) << 5) | vd;
+    }
+
+    /// NOT Vd.16B, Vn.16B — bitwise NOT (v128.not)
+    fn notV16b(vd: u5, vn: u5) u32 {
+        return 0x6E205800 | (@as(u32, vn) << 5) | vd;
     }
 
     // --- Floating-point (double-precision, f64) ---
@@ -5994,5 +6081,24 @@ test "rem-by-constant JIT: power-of-2 divisor uses AND" {
         try testing.expectEqual(@as(u64, 0), result);
         try testing.expectEqual(@as(u64, n % 16), regs[0]);
     }
+}
+
+test "NEON instruction encoding — v128 ops" {
+    if (builtin.cpu.arch != .aarch64) return error.SkipZigTest;
+
+    // LDR Q0, [X1, #0] = 0x3DC00020
+    try testing.expectEqual(@as(u32, 0x3DC00020), a64.ldrQ(0, 1, 0));
+    // LDR Q2, [X3, #16] = offset 16/16=1 → 0x3DC00462
+    try testing.expectEqual(@as(u32, 0x3DC00462), a64.ldrQ(2, 3, 1));
+    // STR Q0, [X1, #0] = 0x3D800020
+    try testing.expectEqual(@as(u32, 0x3D800020), a64.strQ(0, 1, 0));
+    // MOVI V0.2D, #0 = 0x6F00E400
+    try testing.expectEqual(@as(u32, 0x6F00E400), a64.moviV2d_zero(0));
+    // FADD V0.4S, V1.4S, V2.4S = 0x4E22D420
+    try testing.expectEqual(@as(u32, 0x4E22D420), a64.faddV4s(0, 1, 2));
+    // FMUL V3.4S, V4.4S, V5.4S = 0x6E25DC83
+    try testing.expectEqual(@as(u32, 0x6E25DC83), a64.fmulV4s(3, 4, 5));
+    // NOT V0.16B, V1.16B = 0x6E205820
+    try testing.expectEqual(@as(u32, 0x6E205820), a64.notV16b(0, 1));
 }
 
