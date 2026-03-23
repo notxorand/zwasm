@@ -30,19 +30,19 @@ Session handover document. Read at session start.
   - SIMD bench: 19-30x slower than scalar (trampoline overhead, was 20-53x)
   - All tests + samples pass. JIT compiles SIMD hot loops.
 - **5 real-world SIMD C samples** in test/realworld/c_simd/ (wasi-sdk -msimd128)
-- **13.2+ Native NEON** (in progress): **66 opcodes** now native ARM64
-  - f32x4/f64x2 arithmetic (add/sub/mul/div), i32x4/i8x16/i16x8 arithmetic
-  - i32x4 comparisons (eq/ne/lt_s/lt_u/gt_s/gt_u/le_s/le_u/ge_s/ge_u)
-  - f32x4/f64x2 min/max/abs/neg, i32x4.mul/neg
-  - v128.load/store (explicit bounds check, NOT guard pages), v128.const
+- **13.2+ Native NEON** (in progress): **114 opcodes** now native ARM64
+  - All comparisons: i8x16/i16x8/i32x4 (eq/ne/lt/gt/le/ge × s/u), i64x2 (signed only)
+  - All integer arithmetic: add/sub/mul (i8x16/i16x8/i32x4), i64x2 add/sub
+  - All integer abs/neg/min/max (i8x16/i16x8/i32x4, i64x2 abs/neg)
+  - All float arithmetic: f32x4/f64x2 add/sub/mul/div/min/max/abs/neg/sqrt
+  - v128.load/store (explicit bounds check), v128.const
   - splat (all 6 types), extract_lane (i32x4, f32x4)
   - v128 bitwise (and/andnot/or/xor/not)
-  - i16x8 extend low/high (signed/unsigned), i8x16 narrow (signed/unsigned)
-  - i16x8 shift (shl, shr_s, shr_u), i8x16 eq/avgr_u
+  - i16x8 extend low/high (s/u), i8x16 narrow (s/u), i16x8 shift, i8x16 avgr_u
   - SIMD bench: image_blend 4.8x faster than scalar, matrix_mul 1.3x
   - Gap source: v128 load-op-store overhead (10 instrs/op, see jit-debugging.md §8)
   - **Next priorities**:
-    1. More native opcodes (i64x2 compare, i8x16/i16x8 compare, extadd_pairwise, shuffle)
+    1. More native opcodes (extadd_pairwise, dot_product, i32x4 shift, remaining extract/replace_lane)
     2. x86 SSE port (D6: both ISAs per opcode group)
     3. Long-term: NEON register allocator or contiguous v128 storage
 - See `@./.dev/roadmap.md` Phase 13 for step breakdown (13.0-13.8)
