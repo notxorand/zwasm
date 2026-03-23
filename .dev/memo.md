@@ -30,13 +30,19 @@ Session handover document. Read at session start.
   - SIMD bench: 19-30x slower than scalar (trampoline overhead, was 20-53x)
   - All tests + samples pass. JIT compiles SIMD hot loops.
 - **5 real-world SIMD C samples** in test/realworld/c_simd/ (wasi-sdk -msimd128)
-- **13.2+ Native NEON** (in progress): 28 opcodes now native ARM64
-  - f32x4/f64x2 arithmetic, i32x4/i8x16 arithmetic, v128 bitwise
-  - v128.load/store (explicit bounds check), v128.const, splat (all types)
-  - extract_lane (i32x4, f32x4)
-  - Benchmark vs wasmtime: matrix_mul 2.8x, byte_search 3.7x, image_blend 5.6x
-  - Remaining gap (15-17x on dot_product): v128 load-op-store overhead (10 instrs/op)
-  - Next: more opcodes, i16x8 ops, extend/narrow, then x86 SSE port
+- **13.2+ Native NEON** (in progress): **44 opcodes** now native ARM64
+  - f32x4/f64x2 arithmetic, i32x4/i8x16/i16x8 arithmetic
+  - v128.load/store (explicit bounds check, NOT guard pages), v128.const
+  - splat (all 6 types), extract_lane (i32x4, f32x4)
+  - v128 bitwise (and/andnot/or/xor/not)
+  - i16x8 extend low/high (signed/unsigned), i8x16 narrow (signed/unsigned)
+  - i16x8 shift (shl, shr_s, shr_u), i8x16 eq/avgr_u
+  - Benchmark vs wasmtime: matrix_mul **2.8x**, byte_search **3.7x**, image_blend **5.6x**, dot_product 17x
+  - Gap source: v128 load-op-store overhead (10 instrs/op, see jit-debugging.md §8)
+  - **Next priorities**:
+    1. More native opcodes (i32x4 comparison, f32x4 min/max, extadd_pairwise)
+    2. x86 SSE port (D6: both ISAs per opcode group)
+    3. Long-term: NEON register allocator or contiguous v128 storage
 - See `@./.dev/roadmap.md` Phase 13 for step breakdown (13.0-13.8)
 
 ### Key Design (D130)
