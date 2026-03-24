@@ -7,7 +7,7 @@ Session handover document. Read at session start.
 - Stages 0-46 + Phase 1, 3, 5, 8, 10, 11, 13, 15, 19 all complete.
 - Spec: 62,263/62,263 Mac+Ubuntu (100.0%, 0 skip).
 - E2E: 792/792 (Mac+Ubuntu).
-- Real-world: Mac 41/50, Ubuntu 48/50 (JIT bugs W41 + wasmtime diffs W42).
+- Real-world: Mac 44/50 (up from 41, +3 from void-call fix).
 - JIT: Register IR + ARM64/x86_64 + SIMD (NEON 253/256, SSE 244/256).
 - HOT_THRESHOLD=3 (lowered from 10 in W38).
 - Binary: 1.29MB stripped. Memory: ~3.5MB RSS.
@@ -22,25 +22,20 @@ W38 (Lazy AOT) で HOT_THRESHOLD を 10→3 に下げた結果、以前は JIT �
 関数がコンパイルされるようになり、潜在 JIT バグが露出した。
 Spec は 100% だが、real-world プログラムに影響がある。これらを修正するフェーズ。
 
-### Real-world JIT failures (W41)
-
-| Program          | Mac   | Ubuntu | 原因                                     |
-|------------------|-------|--------|------------------------------------------|
-| rust_compression | DIFF  | PASS   | ARM64 back-edge JIT OOB (T=10でも再現)   |
-| rust_enum_match  | DIFF  | PASS   | ARM64 JIT float 化け                     |
-| rust_serde_json  | DIFF  | PASS   | ARM64 JIT OOB                            |
-| tinygo_hello     | DIFF  | DIFF   | ARM64+x86 共通 JIT OOB                   |
-| tinygo_json      | DIFF  | DIFF   | ARM64+x86 共通 JIT OOB                   |
-| tinygo_sort      | DIFF  | PASS   | ARM64 JIT 出力差異                        |
-
-全て `--interp` で正常動作。JIT コードの correctness 問題。
-
-### wasmtime 互換性差異 (W42, Mac のみ)
-
-go_crypto_sha256, go_math_big, go_regex — JIT 無関係、interp でも差異。
-Go runtime の env/args 処理や WASI 差異の可能性。
-
 ### Progress
+
+**Fixed: emitCall reloadVreg for void calls (ARM64 + x86)**
+- Root cause: When a wasm `call` targets a function with 0 results, regalloc
+  sets `rd=0` (dummy). JIT's `emitCall` unconditionally called `reloadVreg(rd)`
+  after the trampoline BLR, which loaded a stale value from `regs[0]` into the
+  physical register for vreg 0 (x22 on ARM64), clobbering a live local variable.
+- Symptom: func#206 in tinygo_hello called func#124 (interfaceTypeAssert, 0 results)
+  with rd=0. After the call, x22 (local 0 = stack pointer) was overwritten with 0
+  (the initial zero-filled value of regs[0]). Then `global.set 0` restored g0 = 80
+  instead of the correct ~64912.
+- Fix: encode `n_results` in `rs2_field` of OP_CALL and OP_CALL_INDIRECT instructions.
+  Skip `reloadVreg(rd)` when `n_results == 0`. Applied to both ARM64 and x86 backends.
+- Also fixed emitCallIndirect with the same pattern.
 
 **Fixed: ARM64 emitMemFill/emitMemCopy/emitMemGrow ABI register clobbering**
 - `getOrLoad` returns physical registers that alias ABI arg registers (x0-x3)
@@ -48,54 +43,32 @@ Go runtime の env/args 処理や WASI 差異の可能性。
 - Fix: spill all arg vregs to memory, load from regs[] into ABI regs
 - x86 backend already had this fix; ARM64 did not
 
-**Remaining: tinygo_hello correctness bugs (both platforms)**
+### Real-world status after fixes (Mac)
 
-Key finding via function exclusion bisection:
-- func#154 (`os.unixFileHandle.Write`, 12 regs) produces wrong type tags
-  - Output: `%!s(int=1)` instead of `arg1` — type tag corruption
-  - Even with all OTHER high-reg functions excluded, func#154 alone causes wrong output
-  - interfaceTypeAssert (func#124, 3 regs) returns wrong result
-- Separately, func#97 + func#193 (23 regs) cause OOB via trampoline
-  - The OOB chain: func#193 → func#200 (via trampoline slow path)
+| Program          | Before | After | Notes                              |
+|------------------|--------|-------|------------------------------------|
+| rust_compression | DIFF   | PASS  | Fixed by void-call fix             |
+| rust_serde_json  | DIFF   | PASS  | Fixed by void-call fix             |
+| rust_enum_match  | DIFF   | DIFF  | ARM64 JIT float issue, needs more  |
+| tinygo_hello     | DIFF   | DIFF  | type assert failed (separate bug)  |
+| tinygo_json      | DIFF   | DIFF  | Needs investigation                |
+| tinygo_sort      | DIFF   | DIFF  | ARM64 JIT output diff              |
+| go_math_big      | DIFF   | DIFF  | W42, not JIT-related               |
+| rust_file_io     | ?      | DIFF  | Needs investigation                |
 
-Verified NOT the cause:
-- ABI register clobbering in BLR callsites (all verified clean)
-- spillCallerSavedLive liveness analysis (tested with conservative spill, still crashes)
-- Memory.fill arguments (fixed, but func#154's memory.fill args don't alias ABI regs)
+### Remaining work
 
-### Critical finding: Register file corruption
-
-Tracing the func#124 (interfaceTypeAssert) call from func#154 shows:
-- `regs[6]` = 0x10740A418 (a NATIVE POINTER, not a wasm i32!)
-- This is the mem_base value from jitGetMemInfo
-- For reg_count=12: mem_base is stored at regs[12], NOT regs[6]
-- But somehow the native pointer ends up in regs[6]
-
-Hypothesis: After emitCall → emitLoadMemCache → BLR jitGetMemInfo,
-the reloadCallerSavedLive loads x10 (r6) from regs[6]. If regs[6] was
-corrupted between the spill and the reload (e.g., by the callee writing
-to the wrong location), x10 gets the wrong value.
-
-Note: vm.zig has THREE JIT compilation paths (line 699, 4461, 7075).
-All three must be checked/guarded consistently.
-
-### Approach (next session)
-
-1. Add JIT-level instrumentation: emit a call to a debug function after
-   each emitLoadMemCache to verify regs[6] == 0 (expected for func#154)
-2. Check if the trampoline fast path callee writes beyond its allocated
-   register frame (off-by-one in `needed` calculation)
-3. Check if jitGetMemInfo writes beyond regs[12..13] (verify the `out`
-   pointer and write count)
-4. Run with ASAN/MSAN if possible
+- 6 programs still failing on Mac (4 JIT-related, 1 W42, 1 rust_file_io)
+- tinygo_hello: "type assert failed" — different from previous OOB crash
+- Ubuntu testing needed for void-call fix verification
 
 ### Open Work Items
 
-| Item     | Description                                       | Status         |
-|----------|---------------------------------------------------|----------------|
-| W41      | JIT real-world correctness (6 programs)           | Next session   |
-| W42      | wasmtime 互換性差異 (3 Go programs, Mac)           | Low priority   |
-| Phase 18 | Lazy Compilation + CLI Extensions                 | Future         |
+| Item     | Description                                       | Status       |
+|----------|---------------------------------------------------|--------------|
+| W41      | JIT real-world correctness (6→4 remaining)        | In progress  |
+| W42      | wasmtime 互換性差異 (go_math_big, Mac)             | Low priority |
+| Phase 18 | Lazy Compilation + CLI Extensions                 | Future       |
 
 ## Completed Phases (summary)
 

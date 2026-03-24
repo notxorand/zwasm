@@ -2676,7 +2676,8 @@ pub const Compiler = struct {
                     data2 = ir[pc.*];
                     pc.* += 1;
                 }
-                self.emitCall(instr.rd, func_idx, n_args, data, if (has_data2) data2 else null, ir, call_pc);
+                const n_results: u16 = instr.rs2_field;
+                self.emitCall(instr.rd, func_idx, n_args, n_results, data, if (has_data2) data2 else null, ir, call_pc);
             },
             regalloc_mod.OP_CALL_INDIRECT => {
                 const data = ir[pc.*];
@@ -3950,7 +3951,7 @@ pub const Compiler = struct {
         self.storeVreg(instr.rd, d);
     }
 
-    fn emitCall(self: *Compiler, rd: u16, func_idx: u32, n_args: u16, data: RegInstr, data2: ?RegInstr, ir: []const RegInstr, call_pc: u32) void {
+    fn emitCall(self: *Compiler, rd: u16, func_idx: u32, n_args: u16, n_results: u16, data: RegInstr, data2: ?RegInstr, ir: []const RegInstr, call_pc: u32) void {
         // Self-call: use lightweight inline path with call_depth guard
         if (func_idx == self.self_func_idx) {
             self.emitInlineSelfCall(rd, data, data2, ir, call_pc);
@@ -4033,7 +4034,7 @@ pub const Compiler = struct {
 
         // 6. Reload caller-saved regs AFTER all BLRs, then result register
         self.reloadCallerSavedLive();
-        self.reloadVreg(rd);
+        if (n_results > 0) self.reloadVreg(rd);
     }
 
     /// Emit call_indirect: table lookup + type check + function call via trampoline.
@@ -4116,7 +4117,7 @@ pub const Compiler = struct {
 
         // 6. Reload caller-saved regs AFTER all BLRs, then result register
         self.reloadCallerSaved();
-        self.reloadVreg(instr.rd);
+        if (instr.rs2_field > 0) self.reloadVreg(instr.rd);
     }
 
     /// Emit GC struct.new via BLR to runtime helper.
