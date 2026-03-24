@@ -48,21 +48,29 @@ Go runtime の env/args 処理や WASI 差異の可能性。
 - Fix: spill all arg vregs to memory, load from regs[] into ABI regs
 - x86 backend already had this fix; ARM64 did not
 
-**Remaining: tinygo_hello OOB (both platforms)**
-- The OOB originates in func#200 (`fmtInteger`) called from func#193 (`printArg`)
-- func#193 JIT passes correct-looking args to func#200 via trampoline
-- func#200 runs via interpreter (401 instrs) but crashes with OOB
-- Bug only manifests with reg_count ≥ 12 functions being JIT'd
-- Likely cause: corrupted wasm memory state from an earlier JIT-compiled function
-- NOT ABI clobbering (all BLR callsites verified)
-- Need: differential execution tracing (compare memory state JIT vs interpreter)
+**Remaining: tinygo_hello correctness bugs (both platforms)**
 
-### Approach
+Key finding via function exclusion bisection:
+- func#154 (`os.unixFileHandle.Write`, 12 regs) produces wrong type tags
+  - Output: `%!s(int=1)` instead of `arg1` — type tag corruption
+  - Even with all OTHER high-reg functions excluded, func#154 alone causes wrong output
+  - interfaceTypeAssert (func#124, 3 regs) returns wrong result
+- Separately, func#97 + func#193 (23 regs) cause OOB via trampoline
+  - The OOB chain: func#193 → func#200 (via trampoline slow path)
 
-1. Build differential execution trace comparing memory writes JIT vs interpreter
-2. Find first divergence in memory state
-3. Trace back to the JIT instruction that wrote the wrong value
-4. Fix root cause, run merge gate
+Verified NOT the cause:
+- ABI register clobbering in BLR callsites (all verified clean)
+- spillCallerSavedLive liveness analysis (tested with conservative spill, still crashes)
+- Memory.fill arguments (fixed, but func#154's memory.fill args don't alias ABI regs)
+
+### Approach (next session)
+
+1. Focus on func#154 (12 regs, simplest crash case):
+   - Add memory write trace: compare JIT vs interpreter store addresses/values
+   - Check if store offsets in emitMemStore match WAT offsets
+   - Verify `isConstAddrSafe` fast path correctness
+2. Alternative: write a WAT module that mimics func#154's structure and test
+3. Consider: is there a bug in the back-edge JIT path for func#97?
 
 ### Open Work Items
 
