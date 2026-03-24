@@ -91,6 +91,22 @@ self-calls does NOT fix it (bug is in regular codegen, not self-call path).
 | 19       | JIT Reliability                       | 2026-03    |
 | 20 (wip) | JIT Correctness Sweep                 | 2026-03-25 |
 
+## Next Session Reference Chain
+
+1. **Orient**: `git log --oneline -5 && git status && git branch`
+2. **This memo**: current task, root causes found, remaining bugs
+3. **Checklist**: `@./.dev/checklist.md` — W41 updated with tinygo_sort details
+4. **JIT debug techniques**: `@./.dev/jit-debugging.md` — dump, ELF wrap, objdump
+5. **JIT code** (ARM64): `src/jit.zig` — emitBinop32/64, emitMemStore/Load, getOrLoad, spillCallerSavedLive
+6. **JIT code** (x86): `src/x86.zig` — same patterns
+7. **Ubuntu testing**: `@./.dev/references/ubuntu-testing-guide.md` — OrbStack VM
+8. **Merge gate checklist**: CLAUDE.md → "Merge Gate Checklist" section
+
+### Key next tasks
+- **W41 tinygo_sort**: func#87 (89 regs). Approach: capstone disassembly, runtime
+  memory comparison, or reg_count bisection 50-89. See checklist for details.
+- **W41 rust_enum_match**: FP JIT bug. Separate investigation.
+
 ## References
 
 - `@./.dev/roadmap.md` — Phase roadmap

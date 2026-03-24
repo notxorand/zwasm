@@ -3832,10 +3832,9 @@ pub const Compiler = struct {
         }
         for (ir) |scan_instr| {
             if (scan_instr.rd < 128) {
-                const op = scan_instr.op;
-                if (!self.isControlFlowOp(op) or op == regalloc_mod.OP_CALL or op == regalloc_mod.OP_CALL_INDIRECT) {
-                    self.written_vregs |= @as(u128, 1) << @as(u7, @intCast(scan_instr.rd));
-                }
+                // The x86 backend's original tracking set the bit unconditionally.
+                // This is slightly conservative (marks control-flow ops too) but safe.
+                self.written_vregs |= @as(u128, 1) << @as(u7, @intCast(scan_instr.rd));
             }
         }
 

@@ -10,27 +10,21 @@ Prefix: W## (to distinguish from CW's F## items).
 
 ## Open Items
 
-- [ ] W41: JIT real-world correctness — remaining bugs after void-call fix
-  Phase 20 fixed void-call reloadVreg (Mac 41→46, Ubuntu 48). Remaining:
+- [ ] W41: JIT real-world correctness — 2 remaining bugs (Mac 47/50)
+  Phase 20 fixed: void-call reloadVreg, written_vregs pre-scan, void self-call result.
+  rust_file_io now PASS. tinygo_hello/json fixed by written_vregs pre-scan.
 
-  **Mac failures (4 DIFF):**
-  - `tinygo_hello`: TWO bugs:
-    1. func#99 (57 regs, 614 IR): type confusion `%!s(int=1)` vs `arg1`
-       → high reg_count specific, 34 spill-only vregs
-    2. func#154 (12 regs): crash "type assert failed" → unreachable
-  - `tinygo_json`: interface type confusion (likely same root cause as func#99)
-  - `tinygo_sort`: sort result `false` instead of `true`
-  - `rust_file_io`: output diff (needs investigation)
+  **Mac remaining (2 JIT DIFF):**
+  - `tinygo_sort`: func#87 (89 regs, 727 IR, quicksort) — `sorted: false`
+    - Bug triggers only when reg_count > 50 (confirmed by threshold test)
+    - NOT: written_vregs (pre-scan already applied), NOT: self-call path
+    - Likely: spill-only vreg handling bug specific to high reg_count
+    - Approach: ARM64 disassembly (capstone), runtime mem comparison,
+      or reg_count bisection (50-89) to find minimum reproducer
+  - `rust_enum_match`: garbage f64 in Triangle coords
+    - FP-related JIT bug, needs separate investigation
 
-  **Ubuntu failures (2 DIFF):**
-  - `tinygo_hello`, `tinygo_json` (same as Mac)
-
-  **Next steps:**
-  1. Investigate func#99 (57 regs): largest impact, likely shared with tinygo_json
-     - Dump JIT disassembly, compare store values JIT vs interpreter
-     - Focus on spill-only vreg handling (>= 23) and scratch register management
-  2. Then func#154 (12 regs): separate crash
-  3. rust_file_io and tinygo_sort: lower priority
+  **Ubuntu:** TBD (re-test after merge)
 
 - [ ] W42: wasmtime 互換性差異 (JIT 無関係)
   go_math_big — crashes with `environ_sizes_get failed` (same in interp and JIT).
