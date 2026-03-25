@@ -42,8 +42,11 @@ Details: `roadmap-archive.md`.
 | ~~W37: Contiguous v128~~       | Done     | LDR Q / STR Q single-instruction v128     |
 | ~~W38: Lazy AOT perf~~         | Done     | HOT_THRESHOLD 10→3, back_edge_bailed      |
 | Multi-value return JIT         | Medium   | wide-arithmetic, multi-return fn JIT      |
-| SIMD register class            | Medium   | Keep v128 in Q regs across ops (big win)  |
-| v128 addr cache in prologue    | Low      | Cache &simd_v128 base, save 1-2 insns     |
+| ~~SIMD register class (W44)~~  | Done     | Q16-Q31/XMM6-15 cache, lazy writeback     |
+| ~~v128 addr cache (W43)~~      | Done     | SIMD_BASE_REG caches simd_v128 base addr  |
+| **SIMD loop persistence (W45)**| **High** | **Keep Q regs across loop iters (78x→10x gap)** |
+| SIMD bounds check elim         | Medium   | Guard pages for v128.load/store            |
+| SIMD FMLA fusion               | Low      | mul+add → FMLA peephole                   |
 | Lazy compilation (Phase 18.2)  | Low      | Defer JIT to first call, faster startup   |
 
 ### Ecosystem & Usability

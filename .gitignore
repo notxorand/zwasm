@@ -51,7 +51,8 @@ wabt/
 .cpcache/
 .clj-kondo/
 
-# Thread test build artifacts
+# Rust build artifacts (bench, thread tests)
+bench/simd/rust-blake2/target/
 test/threads/*/target/
 
 # Fuzz (generated corpus and artifacts)

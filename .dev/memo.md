@@ -16,106 +16,88 @@ Session handover document. Read at session start.
 
 ## Current Task
 
-**W44: SIMD Register Class (D132 Phase B) — DONE (merged 2026-03-26)**
+**W45: SIMD Loop Persistence — NEXT**
 
-Added SIMD register cache: Q16-Q31 (ARM64, 16 regs) and XMM6-XMM15 (x86, 10 regs).
-Eliminates per-op simd_v128[] memory traffic via lazy writeback with LRU eviction.
-Merge Gate: Mac + Ubuntu all pass.
+Keep Q/XMM-cached v128 values alive across loop iterations. Currently
+`evictAllCaches()` at every branch target (including loop headers) flushes
+all Q regs, destroying the W44 cache benefit in loops.
 
-### Design (from D132 Phase B)
+### Problem (diagnosed 2026-03-26)
 
-**Goal**: v128 values stay in SIMD registers across consecutive operations.
-Current: every SIMD op does `load simd_v128[vreg] → NEON/SSE → store simd_v128[vreg]`.
-Target: `v128.const → Q16`, `i32x4.add Q16,Q17 → Q18`, no memory traffic.
+```
+loop_header:          ← evictAllCaches() fires here
+  STR Q16 → mem       ; flush (5-6 vregs per iter)
+  STR Q17 → mem
+  LDR Q16 ← mem       ; reload (cold)
+  FMUL V17, V16, V16  ; actual compute
+  ...
+  B loop_header        ; → flush again
+```
 
-**Register allocation**:
-- ARM64: Q16-Q31 for v128 (16 regs, no FP D-cache conflict since D-cache uses D2-D15)
-- x86: XMM5-XMM15 for v128 (~11 regs), XMM0-XMM2 scratch, XMM3-XMM4 existing SIMD scratch
+Wasmtime keeps v128 in regs across iterations — 0 memory traffic.
 
-**Implementation plan (ordered by dependency)**:
+### Facts
 
-1. **regalloc.zig: v128 type tracking**
-   - Add `is_v128` bit to vreg metadata (or separate v128_vregs bitset)
-   - SIMD opcodes mark their rd as v128, rs1/rs2 as v128 consumers
-   - Scalar ops consuming v128 (e.g., `i32x4.extract_lane`) need cross-class handling
+- ARM64 native SIMD: 247/276 ops (89%) — trampoline NOT the bottleneck
+- Mandelbrot: 12 NEON + 12 loads + 12 stores/iter → should be 12 NEON only
+- zwasm SIMD is **slower** than scalar (eviction overhead > SIMD benefit)
+- Current SIMD gap: 38-248x vs wasmtime (scalar gap: 1-6x)
 
-2. **regalloc.zig: SIMD register class allocation**
-   - New `simd_reg_count` field — number of v128 vregs mapped to physical SIMD regs
-   - v128 vregs get separate numbering from scalar vregs
-   - Spill target: `simd_v128[]` array (existing, already used by interpreter)
+### Baseline benchmarks (2026-03-26, zwasm JIT cached vs wasmtime AOT cached)
 
-3. **jit.zig (ARM64): Q register mapping**
-   - `v128VregToPhys(vreg) → Q16..Q31` mapping function
-   - `emitSimdBinaryOp`: operate directly on Q regs instead of load/op/store
-   - `emitLoadV128`/`emitStoreV128`: only for spill/reload, not every op
-   - Prologue: load v128 vregs from `simd_v128[]` into Q regs
-   - Epilogue: store dirty Q regs back to `simd_v128[]`
+| Benchmark            | zwasm  | wasmtime | ratio  | notes          |
+|----------------------|--------|----------|--------|----------------|
+| simd_mandel (simd)   | 18.7s  | 240ms    | 78x    | loop-dominated |
+| simd_matmul (simd)   | 2.7s   | 20ms     | 136x   | loop-dominated |
+| simd_chain           | 390ms  | 10ms     | 39x    | loop-dominated |
+| simd_nbody (simd)    | 520ms  | 10ms     | 52x    | loop-dominated |
+| fib (cached)         | 50ms   | 80ms     | 0.6x   | zwasm wins     |
+| st_fib2 (cached)     | 900ms  | 680ms    | 1.3x   | healthy        |
+| st_matrix (cached)   | 330ms  | 90ms     | 3.7x   | scalar gap     |
 
-4. **x86.zig: XMM register mapping**
-   - Same pattern as ARM64 but with XMM5-XMM15
-   - Existing `SIMD_SCRATCH0`/`SIMD_SCRATCH1` (XMM3/XMM4) unchanged
+### Fix path (ordered by impact)
 
-5. **Spill/reload across calls**
-   - Q16-Q31 are caller-saved on ARM64 → spill to `simd_v128[]` before BLR
-   - XMM are caller-saved on x86 → same pattern
-   - `spillCallerSaved`/`reloadCallerSaved` must handle SIMD reg class
+1. **Loop-header Q-reg persistence** → 2-3x improvement
+   - Distinguish loop backedge targets from merge points
+   - At loop headers: skip eviction (same Q state from backedge)
+   - At merge points (if/else join): still evict (different paths)
+   - Key: `scanBranchTargets` needs loop detection (back edges)
+   - Code: `jit.zig` compile loop (line ~2604), `x86.zig` (line ~3872)
+   - Reference: fp_dreg cache already skips eviction in some cases
 
-6. **Cross-tier compatibility (trampoline)**
-   - Before JIT→interpreter transition: flush dirty Q/XMM to `simd_v128[]`
-   - After interpreter→JIT return: reload Q/XMM from `simd_v128[]`
-   - `emitStoreV128` already writes lo-half to `regs[]` — keep for compatibility
+2. **v128.load/store bounds check elimination** → 1.5-2x
+   - Guard pages already exist (`use_guard_pages`)
+   - v128.load/store should use same guard page path as scalar loads
 
-7. **Lane extract/insert (cross-class)**
-   - `i32x4.extract_lane`: Q reg → scalar GPR (UMOV on ARM64, PEXTRD on x86)
-   - `i32x4.replace_lane`: scalar GPR → Q reg (INS on ARM64, PINSRD on x86)
+3. **FMLA instruction fusion** → 1.2-1.5x
+   - Detect `f32x4.mul + f32x4.add` pattern → emit ARM64 FMLA
+   - Peephole in emitSimdNativeInner or IR fusion pass
 
-**Key risks**:
-- FP D-cache (D2-D15) shares the lower halves with Q2-Q15. Using Q16-Q31
-  avoids this conflict entirely.
-- `spillCallerSaved` loop needs to iterate both scalar and SIMD reg classes.
-- v128.const pool values (128-bit) need careful loading into Q regs.
-
-**Expected improvement**: 30-50% on SIMD-heavy code.
-
-### Approach
-
-Start with ARM64 (cleaner register model, Q16-Q31 are dedicated).
-Work incrementally: first handle binary ops (i32x4.add etc.), then unary,
-then const/load/store, then spill/reload, then x86.
+4. Realistic target: **10-20x of wasmtime** (from current 38-248x)
 
 ### Key code locations
 
-- `src/regalloc.zig`: vreg allocation, `RegInstr` struct, `OP_SIMD_*` handling
-- `src/jit.zig`: `emitSimdBinaryOp`, `emitLoadV128`, `emitStoreV128`, prologue/epilogue
-- `src/x86.zig`: same pattern, XMM regs
-- `src/predecode.zig`: `SIMD_BASE` opcode range (0xFD00+)
-- `src/vm.zig`: interpreter SIMD execution (reference for semantics)
+- `jit.zig:2604`: branch target eviction (ARM64)
+- `x86.zig:3872`: branch target eviction (x86)
+- `jit.zig:simdQregEvictAll`: Q-cache eviction function
+- `jit.zig:emitSimdBinaryNeon`: direct Q-reg binary ops (already optimal within basic block)
+- `jit.zig:scanBranchTargets`: identifies branch targets (needs loop detection)
 
-### SIMD Performance Analysis (2026-03-26)
+### SIMD benchmarks
 
-**Q-cache (W44) is architecturally correct but underperforming in loops.**
-
-Root cause: `evictAllCaches()` at every branch target (including loop headers).
-Each loop iteration flushes all Q regs to simd_v128[] and reloads from memory.
-Wasmtime (Cranelift) keeps v128 in registers across loop iterations.
-
-- ARM64 native SIMD coverage: 247/276 ops (89%) — trampoline is NOT the bottleneck
-- Mandelbrot inner loop: 12 NEON ops + 12 loads + 12 stores per iter (should be 12 NEON only)
-- zwasm SIMD slower than scalar (eviction overhead > SIMD benefit)
-
-**Fix path (ordered by impact)**:
-1. Loop-header Q-reg persistence (don't evict at backedge targets) → 2-3x
-2. v128.load/store guard pages (skip bounds check) → 1.5-2x
-3. FMLA fusion (fused multiply-add) → 1.2-1.5x
-4. Realistic target: 5-15x of wasmtime (from current 38-248x)
+Build: `bash bench/simd/build_simd_bench.sh`
+Compare: `bash bench/compare_runtimes.sh --rt=zwasm,wasmtime`
+Sources: `bench/simd/src/` (C: mandelbrot, matmul, simd_chain, nbody, etc.)
+         `bench/simd/rust-blake2/` (Rust: blake2b_simd)
 
 ### Open Work Items
 
-| Item       | Description                                       | Status         |
-|------------|---------------------------------------------------|----------------|
-| **W44**    | **SIMD register class (D132 Phase B)**            | **DONE** (merged 2026-03-26) |
-| Phase 18   | Lazy Compilation + CLI Extensions                 | Future         |
-| Zig 0.16   | API breaking changes                              | When released  |
+| Item       | Description                                       | Status           |
+|------------|---------------------------------------------------|------------------|
+| **W45**    | **SIMD loop persistence (Q-reg across loops)**    | **Next**         |
+| W44        | SIMD register class (D132 Phase B)                | DONE (2026-3-26) |
+| Phase 18   | Lazy Compilation + CLI Extensions                 | Future           |
+| Zig 0.16   | API breaking changes                              | When released    |
 
 ## Completed Phases (summary)
 

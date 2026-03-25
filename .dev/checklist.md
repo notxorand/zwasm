@@ -31,4 +31,11 @@ W41 (partial): void-call reloadVreg fix — emitCall/emitCallIndirect skips
      reloadVreg(rd) when n_results=0. Fixes rust_compression, rust_serde_json,
      rust_enum_match (+3 Mac, stable Ubuntu). n_results encoded in rs2_field.
 
+W43: SIMD v128 base addr cache (SIMD_BASE_REG x17). Phase A of D132.
+W44: SIMD register class — Q16-Q31 (ARM64) + XMM6-XMM15 (x86) cache.
+     Phase B of D132. Merged 2026-03-26. Q-cache with LRU eviction + lazy
+     writeback. Benefit limited by loop-header eviction (diagnosed same day).
+W45: SIMD loop persistence — NEXT. Skip Q-cache eviction at loop headers.
+     Requires back-edge detection in scanBranchTargets.
+
 W2-W36: See git history. All resolved through Stages 0-47 and Phases 1-19.
