@@ -3479,13 +3479,20 @@ pub const Compiler = struct {
         // Check divisor == 0 → DivisionByZero
         self.emit(a64.cmpImm32(rs2, 0));
         self.emitCondError(.eq, 3);
+        // Save rs1 before division when d aliases rs1 — div clobbers d,
+        // and msub needs the original dividend as Xa operand.
+        const dividend = if (d == rs1) blk: {
+            self.emit(a64.mov64(SCRATCH, rs1));
+            self.scratch_vreg = null;
+            break :blk SCRATCH;
+        } else rs1;
         // rem = rs1 - (rs1/rs2)*rs2  via SDIV + MSUB
         if (sign == .signed) {
             self.emit(a64.sdiv32(d, rs1, rs2));
         } else {
             self.emit(a64.udiv32(d, rs1, rs2));
         }
-        self.emit(a64.msub32(d, d, rs2, rs1));
+        self.emit(a64.msub32(d, d, rs2, dividend));
         self.storeVreg(instr.rd, d);
     }
 
@@ -3554,12 +3561,19 @@ pub const Compiler = struct {
         const d = destReg(instr.rd);
         self.emit(a64.cmpImm64(rs2, 0));
         self.emitCondError(.eq, 3);
+        // Save rs1 before division when d aliases rs1 — udiv clobbers d,
+        // and msub needs the original dividend as Xa operand.
+        const dividend = if (d == rs1) blk: {
+            self.emit(a64.mov64(SCRATCH, rs1));
+            self.scratch_vreg = null;
+            break :blk SCRATCH;
+        } else rs1;
         if (sign == .signed) {
             self.emit(a64.sdiv64(d, rs1, rs2));
         } else {
             self.emit(a64.udiv64(d, rs1, rs2));
         }
-        self.emit(a64.msub64(d, d, rs2, rs1));
+        self.emit(a64.msub64(d, d, rs2, dividend));
         self.storeVreg(instr.rd, d);
     }
 
@@ -7568,6 +7582,76 @@ test "compile and execute i32 remainder" {
         var regs: [7]u64 = .{ 10, 0, 0, 0, 0, 0, 0 };
         const result = jit_code.entry(&regs, undefined, undefined);
         try testing.expectEqual(@as(u64, 3), result); // DivisionByZero
+    }
+}
+
+test "remainder with rd == rs1 (aliasing)" {
+    if (builtin.cpu.arch != .aarch64) return;
+
+    const alloc = testing.allocator;
+    // rem_u r0, r0, r1 — rd aliases rs1, triggers msub aliasing bug if unfixed
+    var code = [_]RegInstr{
+        .{ .op = 0x70, .rd = 0, .rs1 = 0, .rs2_field = 1 }, // i32.rem_u r0, r0, r1
+        .{ .op = regalloc_mod.OP_RETURN, .rd = 0, .rs1 = 0, .operand = 0 },
+    };
+    var reg_func = RegFunc{
+        .code = &code,
+        .pool64 = &.{},
+        .reg_count = 2,
+        .local_count = 2,
+        .alloc = alloc,
+    };
+
+    const jit_code = compileFunction(alloc, &reg_func, &.{}, 0, 0, 1, null, 0, false, null) orelse
+        return error.CompilationFailed;
+    defer jit_code.deinit(alloc);
+
+    // 7 % 3 = 1 (not 0!)
+    {
+        var regs: [6]u64 = .{ 7, 3, 0, 0, 0, 0 };
+        const result = jit_code.entry(&regs, undefined, undefined);
+        try testing.expectEqual(@as(u64, 0), result);
+        try testing.expectEqual(@as(u64, 1), regs[0]);
+    }
+
+    // 111 % 10000000000 = 111 (dividend < divisor)
+    {
+        var regs: [6]u64 = .{ 111, 10000000000, 0, 0, 0, 0 };
+        const result = jit_code.entry(&regs, undefined, undefined);
+        try testing.expectEqual(@as(u64, 0), result);
+        try testing.expectEqual(@as(u64, 111), regs[0]);
+    }
+
+    // i64.rem_u with aliasing
+    var code64 = [_]RegInstr{
+        .{ .op = 0x82, .rd = 0, .rs1 = 0, .rs2_field = 1 }, // i64.rem_u r0, r0, r1
+        .{ .op = regalloc_mod.OP_RETURN, .rd = 0, .rs1 = 0, .operand = 0 },
+    };
+    var reg_func64 = RegFunc{
+        .code = &code64,
+        .pool64 = &.{},
+        .reg_count = 2,
+        .local_count = 2,
+        .alloc = alloc,
+    };
+    const jit64 = compileFunction(alloc, &reg_func64, &.{}, 0, 0, 1, null, 0, false, null) orelse
+        return error.CompilationFailed;
+    defer jit64.deinit(alloc);
+
+    // 111111111011 % 10000000000000000000 = 111111111011
+    {
+        var regs: [6]u64 = .{ 111111111011, 10000000000000000000, 0, 0, 0, 0 };
+        const result = jit64.entry(&regs, undefined, undefined);
+        try testing.expectEqual(@as(u64, 0), result);
+        try testing.expectEqual(@as(u64, 111111111011), regs[0]);
+    }
+
+    // 100 % 7 = 2
+    {
+        var regs: [6]u64 = .{ 100, 7, 0, 0, 0, 0 };
+        const result = jit64.entry(&regs, undefined, undefined);
+        try testing.expectEqual(@as(u64, 0), result);
+        try testing.expectEqual(@as(u64, 2), regs[0]);
     }
 }
 
