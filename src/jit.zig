@@ -1032,6 +1032,11 @@ const MEM_SIZE: u5 = 28; // x28 — linear memory size in bytes
 /// Interpreter restores reg_ptr via defer, so JIT doesn't need to write back.
 const REG_PTR_VAL: u5 = 27; // x27 — vm.reg_ptr value (non-memory functions only)
 
+/// Dedicated register for SIMD v128 base address cache.
+/// Holds vm_ptr + @offsetOf(Vm, simd_v128) when has_simd = true.
+/// Sacrifices vreg 22 (x17) — functions with 23 vregs AND SIMD are extremely rare.
+const SIMD_BASE_REG: u5 = 17; // x17 (IP1)
+
 /// Scratch FP registers for floating-point operations.
 /// d0 and d1 are caller-saved volatile FP regs on ARM64.
 const FP_SCRATCH0: u5 = 0; // d0
@@ -1107,6 +1112,8 @@ pub const Compiler = struct {
     inst_ptr_cached: bool,
     /// True when the function contains SIMD opcodes. Used to guard v128 sync in MOV/CONST.
     has_simd: bool,
+    /// True when SIMD_BASE_REG (x17) caches vm_ptr + simd_v128_offset.
+    simd_base_cached: bool,
     /// True when call_depth is cached in x28 (non-memory self-call functions only).
     /// Eliminates per-call memory load/store for depth tracking.
     depth_reg_cached: bool,
@@ -1199,6 +1206,7 @@ pub const Compiler = struct {
             .vm_ptr_cached = false,
             .inst_ptr_cached = false,
             .has_simd = false,
+            .simd_base_cached = false,
             .depth_reg_cached = false,
             .fp_cache_limit = FP_CACHE_SIZE,
             .call_live_set = 0,
@@ -1218,6 +1226,17 @@ pub const Compiler = struct {
         self.fuel_check_branches.deinit(self.alloc);
     }
 
+    /// Effective max physical registers: 22 when SIMD base is cached (x17 reserved), else 23.
+    fn effectiveMaxRegs(self: *const Compiler) u8 {
+        return if (self.simd_base_cached) MAX_PHYS_REGS - 1 else MAX_PHYS_REGS;
+    }
+
+    /// Like vregToPhys but returns null for vreg 22 when SIMD base is cached (x17 reserved).
+    inline fn vregToPhysEff(self: *const Compiler, vreg: u16) ?u5 {
+        if (self.simd_base_cached and vreg == 22) return null;
+        return vregToPhys(vreg);
+    }
+
     fn emit(self: *Compiler, inst: u32) void {
         self.code.append(self.alloc, inst) catch {};
     }
@@ -1229,7 +1248,7 @@ pub const Compiler = struct {
     /// Load virtual register value into physical register.
     /// If vreg maps to a physical reg, emit MOV. Otherwise, load from memory.
     fn loadVreg(self: *Compiler, dst: u5, vreg: u16) void {
-        if (vregToPhys(vreg)) |phys| {
+        if (self.vregToPhysEff(vreg)) |phys| {
             if (phys != dst) self.emit(a64.mov64(dst, phys));
         } else {
             self.emit(a64.ldr64(dst, REGS_PTR, @as(u16, vreg) * 8));
@@ -1238,7 +1257,7 @@ pub const Compiler = struct {
 
     /// Store value from physical register to virtual register.
     fn storeVreg(self: *Compiler, vreg: u16, src: u5) void {
-        if (vregToPhys(vreg)) |phys| {
+        if (self.vregToPhysEff(vreg)) |phys| {
             if (phys != src) self.emit(a64.mov64(phys, src));
             // SCRATCH may have been reused as temp — invalidate stale cache
             if (src == SCRATCH) self.scratch_vreg = null;
@@ -1263,18 +1282,18 @@ pub const Compiler = struct {
         if (self.fpCacheFind(vreg)) |slot| {
             if (self.fp_dreg_dirty[slot]) {
                 const dreg = fpSlotToDreg(slot);
-                const target = vregToPhys(vreg) orelse scratch;
+                const target = self.vregToPhysEff(vreg) orelse scratch;
                 self.emit(a64.fmovToGp64(target, dreg));
                 self.fp_dreg_dirty[slot] = false;
                 // Also write back to memory if vreg is spilled (no phys reg)
-                if (vregToPhys(vreg) == null) {
+                if (self.vregToPhysEff(vreg) == null) {
                     self.emit(a64.str64(scratch, REGS_PTR, @as(u16, vreg) * 8));
                     if (scratch == SCRATCH) self.scratch_vreg = vreg;
                 }
                 return target;
             }
         }
-        if (vregToPhys(vreg)) |phys| return phys;
+        if (self.vregToPhysEff(vreg)) |phys| return phys;
         // Check scratch register cache — skip redundant load if value already in SCRATCH
         if (scratch == SCRATCH) {
             if (self.scratch_vreg) |cached| {
@@ -1288,8 +1307,8 @@ pub const Compiler = struct {
 
     /// Get destination register: physical register if mapped, otherwise SCRATCH.
     /// Use with storeVreg(rd, dest) which is a no-op when dest == physical.
-    fn destReg(vreg: u16) u5 {
-        return vregToPhys(vreg) orelse SCRATCH;
+    fn destRegEff(self: *const Compiler, vreg: u16) u5 {
+        return self.vregToPhysEff(vreg) orelse SCRATCH;
     }
 
     // --- FP D-register cache (D2-D15) ---
@@ -1413,7 +1432,7 @@ pub const Compiler = struct {
         if (self.fpCacheFind(vreg)) |slot| {
             if (self.fp_dreg_dirty[slot]) {
                 const dreg = fpSlotToDreg(slot);
-                const d = destReg(vreg);
+                const d = self.destRegEff(vreg);
                 self.emit(a64.fmovToGp64(d, dreg));
                 self.storeVreg(vreg, d);
                 self.fp_dreg_dirty[slot] = false;
@@ -1442,7 +1461,7 @@ pub const Compiler = struct {
     /// Spill caller-saved virtual regs (r5-r11 → x9-x15, r14-r19 → x2-x7) to memory.
     /// Callee-saved regs (r0-r4 → x22-x26, r12-r13 → x20-x21) are preserved.
     fn spillCallerSaved(self: *Compiler) void {
-        const max: u8 = @intCast(@min(self.reg_count, MAX_PHYS_REGS));
+        const max: u8 = @intCast(@min(self.reg_count, self.effectiveMaxRegs()));
         if (max <= 5) return;
         for (5..max) |i| {
             const vreg: u16 = @intCast(i);
@@ -1478,7 +1497,7 @@ pub const Compiler = struct {
     /// Reload caller-saved virtual regs from memory (after function calls).
     /// Callee-saved regs (r0-r4 → x22-x26, r12-r13 → x20-x21) are preserved across BLR.
     fn reloadCallerSaved(self: *Compiler) void {
-        const max: u8 = @intCast(@min(self.reg_count, MAX_PHYS_REGS));
+        const max: u8 = @intCast(@min(self.reg_count, self.effectiveMaxRegs()));
         if (max <= 5) return;
         for (5..max) |i| {
             const vreg: u16 = @intCast(i);
@@ -1490,11 +1509,13 @@ pub const Compiler = struct {
                 self.emit(a64.ldr64(phys, REGS_PTR, @as(u16, vreg) * 8));
             }
         }
+        // Reload SIMD base (x17 is caller-saved, trashed by BLR)
+        if (self.simd_base_cached) self.emitLoadSimdBase();
     }
 
     /// Reload caller-saved regs, optionally skipping one vreg (result of inline call).
     fn reloadCallerSavedExcept(self: *Compiler, skip_vreg: ?u8) void {
-        const max: u8 = @intCast(@min(self.reg_count, MAX_PHYS_REGS));
+        const max: u8 = @intCast(@min(self.reg_count, self.effectiveMaxRegs()));
         if (max <= 5) return;
         for (5..max) |i| {
             const vreg: u16 = @intCast(i);
@@ -1507,6 +1528,8 @@ pub const Compiler = struct {
                 self.emit(a64.ldr64(phys, REGS_PTR, @as(u16, vreg) * 8));
             }
         }
+        // Reload SIMD base (x17 is caller-saved, trashed by BLR)
+        if (self.simd_base_cached) self.emitLoadSimdBase();
     }
 
     /// Compute live vreg bitmap at a call site by forward-scanning the IR.
@@ -1633,7 +1656,7 @@ pub const Compiler = struct {
 
     /// Spill caller-saved vregs that are live after the call.
     fn spillCallerSavedLive(self: *Compiler, ir: []const RegInstr, call_pc: u32) void {
-        const max: u8 = @intCast(@min(self.reg_count, MAX_PHYS_REGS));
+        const max: u8 = @intCast(@min(self.reg_count, self.effectiveMaxRegs()));
         if (max <= 5) return;
         const live_set = computeCallLiveSet(ir, call_pc);
         self.call_live_set = live_set;
@@ -1650,7 +1673,7 @@ pub const Compiler = struct {
 
     /// Reload only caller-saved vregs that were spilled as live.
     fn reloadCallerSavedLive(self: *Compiler) void {
-        const max: u8 = @intCast(@min(self.reg_count, MAX_PHYS_REGS));
+        const max: u8 = @intCast(@min(self.reg_count, self.effectiveMaxRegs()));
         if (max <= 5) return;
         const live_set = self.call_live_set;
         for (5..max) |i| {
@@ -1661,11 +1684,13 @@ pub const Compiler = struct {
                 self.emit(a64.ldr64(phys, REGS_PTR, @as(u16, vreg) * 8));
             }
         }
+        // Reload SIMD base (x17 is caller-saved, trashed by BLR)
+        if (self.simd_base_cached) self.emitLoadSimdBase();
     }
 
     /// Reload caller-saved live vregs, optionally skipping one vreg (result of call).
     fn reloadCallerSavedLiveExcept(self: *Compiler, skip_vreg: ?u16) void {
-        const max: u8 = @intCast(@min(self.reg_count, MAX_PHYS_REGS));
+        const max: u8 = @intCast(@min(self.reg_count, self.effectiveMaxRegs()));
         if (max <= 5) return;
         const live_set = self.call_live_set;
         for (5..max) |i| {
@@ -1679,11 +1704,13 @@ pub const Compiler = struct {
                 self.emit(a64.ldr64(phys, REGS_PTR, @as(u16, vreg) * 8));
             }
         }
+        // Reload SIMD base (x17 is caller-saved, trashed by BLR)
+        if (self.simd_base_cached) self.emitLoadSimdBase();
     }
 
     /// Reload a single virtual register from memory.
     fn reloadVreg(self: *Compiler, vreg: u16) void {
-        if (vregToPhys(vreg)) |phys| {
+        if (self.vregToPhysEff(vreg)) |phys| {
             self.emit(a64.ldr64(phys, REGS_PTR, @as(u16, vreg) * 8));
         }
     }
@@ -2055,13 +2082,31 @@ pub const Compiler = struct {
         // Load virtual registers from regs[] into physical registers.
         // Must be AFTER emitLoadMemCache() which calls BLR (trashes x0-x18).
         // Only load vregs that are read before written (prologue_load_mask).
-        const max: u8 = @intCast(@min(self.reg_count, MAX_PHYS_REGS));
+        const max: u8 = @intCast(@min(self.reg_count, self.effectiveMaxRegs()));
         for (0..max) |i| {
             const vreg: u16 = @intCast(i);
             if (vreg < 20 and self.prologue_load_mask & (@as(u32, 1) << @intCast(vreg)) == 0) continue;
             if (vregToPhys(vreg)) |phys| {
                 self.emit(a64.ldr64(phys, REGS_PTR, @as(u16, vreg) * 8));
             }
+        }
+
+        // Cache SIMD v128 base address in x17 for fast address computation.
+        if (self.simd_base_cached) {
+            self.emitLoadSimdBase();
+        }
+    }
+
+    /// Load SIMD v128 base address (vm_ptr + simd_v128_offset) into SIMD_BASE_REG (x17).
+    fn emitLoadSimdBase(self: *Compiler) void {
+        self.emitLoadVmPtr(SIMD_BASE_REG);
+        const offset = self.simd_v128_offset;
+        if (offset <= 4095) {
+            self.emit(a64.addImm64(SIMD_BASE_REG, SIMD_BASE_REG, @intCast(offset)));
+        } else {
+            const offset_instrs = a64.loadImm64(SCRATCH, offset);
+            for (offset_instrs) |inst| self.emit(inst);
+            self.emit(a64.add64(SIMD_BASE_REG, SIMD_BASE_REG, SCRATCH));
         }
     }
 
@@ -2087,7 +2132,7 @@ pub const Compiler = struct {
         const is_unsigned = (sub & 0x01) != 0; // bit 0: unsigned vs signed
         const is_i64 = (sub & 0x04) != 0; // bit 2: i64 vs i32
         const src = self.getOrLoad(instr.rs1, SCRATCH);
-        const d = destReg(instr.rd);
+        const d = self.destRegEff(instr.rd);
 
         // Move source to FP register
         if (is_f64) {
@@ -2156,7 +2201,7 @@ pub const Compiler = struct {
     fn emitEpilogue(self: *Compiler, result_vreg: ?u16) void {
         // Store result to regs[0] if needed
         if (result_vreg) |rv| {
-            if (vregToPhys(rv)) |phys| {
+            if (self.vregToPhysEff(rv)) |phys| {
                 self.emit(a64.str64(phys, REGS_PTR, 0));
             } else {
                 self.emit(a64.ldr64(SCRATCH, REGS_PTR, @as(u16, rv) * 8));
@@ -2193,7 +2238,7 @@ pub const Compiler = struct {
 
     /// Store vreg value to regs[result_idx] for multi-value return.
     fn emitStoreResultVreg(self: *Compiler, result_idx: u32, vreg: u16) void {
-        if (vregToPhys(vreg)) |phys| {
+        if (self.vregToPhysEff(vreg)) |phys| {
             self.emit(a64.str64(phys, REGS_PTR, @intCast(result_idx * 8)));
         } else {
             self.emit(a64.ldr64(SCRATCH, REGS_PTR, @as(u16, vreg) * 8));
@@ -2301,12 +2346,17 @@ pub const Compiler = struct {
         // Load ALL physically-mapped vregs from register file.
         // Unlike normal prologue (which uses prologue_load_mask), OSR must load all
         // because we're entering mid-function with interpreter's register state.
-        const max: u8 = @intCast(@min(self.reg_count, MAX_PHYS_REGS));
+        const max: u8 = @intCast(@min(self.reg_count, self.effectiveMaxRegs()));
         for (0..max) |i| {
             const vreg: u16 = @intCast(i);
             if (vregToPhys(vreg)) |phys| {
                 self.emit(a64.ldr64(phys, REGS_PTR, @as(u16, vreg) * 8));
             }
+        }
+
+        // Cache SIMD v128 base address — must match normal prologue.
+        if (self.simd_base_cached) {
+            self.emitLoadSimdBase();
         }
 
         // Jump to the loop body at pc_map[target_pc]
@@ -2487,6 +2537,7 @@ pub const Compiler = struct {
         for (ir) |scan_instr| {
             if (scan_instr.op >= predecode_mod.SIMD_BASE and scan_instr.op <= predecode_mod.SIMD_BASE + 0x113) {
                 self.has_simd = true;
+                self.simd_base_cached = true;
                 break;
             }
         }
@@ -2589,7 +2640,7 @@ pub const Compiler = struct {
                 }
             },
             regalloc_mod.OP_CONST32 => {
-                const d = destReg(instr.rd);
+                const d = self.destRegEff(instr.rd);
                 const val = instr.operand;
                 if (val <= 0xFFFF) {
                     self.emit(a64.movz64(d, @truncate(val), 0));
@@ -2605,7 +2656,7 @@ pub const Compiler = struct {
                 if (self.has_simd) self.emitClearV128(instr.rd);
             },
             regalloc_mod.OP_CONST64 => {
-                const d = destReg(instr.rd);
+                const d = self.destRegEff(instr.rd);
                 const val = self.pool64[instr.operand];
                 const instrs = a64.loadImm64(d, val);
                 for (instrs) |inst| self.emit(inst);
@@ -2716,7 +2767,7 @@ pub const Compiler = struct {
             0x77 => { // i32.rotl — RORV(n, 32-count)
                 const rs1 = self.getOrLoad(instr.rs1, SCRATCH);
                 const rs2 = self.getOrLoad(instr.rs2(), SCRATCH2);
-                const d = destReg(instr.rd);
+                const d = self.destRegEff(instr.rd);
                 self.emit(a64.neg32(SCRATCH2, rs2)); // negate shift amount
                 self.emit(a64.rorv32(d, rs1, SCRATCH2));
                 self.storeVreg(instr.rd, d);
@@ -2724,19 +2775,19 @@ pub const Compiler = struct {
             0x78 => { // i32.rotr
                 const rs1 = self.getOrLoad(instr.rs1, SCRATCH);
                 const rs2 = self.getOrLoad(instr.rs2(), SCRATCH2);
-                const d = destReg(instr.rd);
+                const d = self.destRegEff(instr.rd);
                 self.emit(a64.rorv32(d, rs1, rs2));
                 self.storeVreg(instr.rd, d);
             },
             0x67 => { // i32.clz
                 const src = self.getOrLoad(instr.rs1, SCRATCH);
-                const d = destReg(instr.rd);
+                const d = self.destRegEff(instr.rd);
                 self.emit(a64.clz32(d, src));
                 self.storeVreg(instr.rd, d);
             },
             0x68 => { // i32.ctz — RBIT then CLZ
                 const src = self.getOrLoad(instr.rs1, SCRATCH);
-                const d = destReg(instr.rd);
+                const d = self.destRegEff(instr.rd);
                 self.emit(a64.rbit32(d, src));
                 self.emit(a64.clz32(d, d));
                 self.storeVreg(instr.rd, d);
@@ -2777,7 +2828,7 @@ pub const Compiler = struct {
             0x89 => { // i64.rotl
                 const rs1 = self.getOrLoad(instr.rs1, SCRATCH);
                 const rs2 = self.getOrLoad(instr.rs2(), SCRATCH2);
-                const d = destReg(instr.rd);
+                const d = self.destRegEff(instr.rd);
                 self.emit(a64.neg64(SCRATCH2, rs2));
                 self.emit(a64.rorv64(d, rs1, SCRATCH2));
                 self.storeVreg(instr.rd, d);
@@ -2785,19 +2836,19 @@ pub const Compiler = struct {
             0x8A => { // i64.rotr
                 const rs1 = self.getOrLoad(instr.rs1, SCRATCH);
                 const rs2 = self.getOrLoad(instr.rs2(), SCRATCH2);
-                const d = destReg(instr.rd);
+                const d = self.destRegEff(instr.rd);
                 self.emit(a64.rorv64(d, rs1, rs2));
                 self.storeVreg(instr.rd, d);
             },
             0x79 => { // i64.clz
                 const src = self.getOrLoad(instr.rs1, SCRATCH);
-                const d = destReg(instr.rd);
+                const d = self.destRegEff(instr.rd);
                 self.emit(a64.clz64(d, src));
                 self.storeVreg(instr.rd, d);
             },
             0x7A => { // i64.ctz
                 const src = self.getOrLoad(instr.rs1, SCRATCH);
-                const d = destReg(instr.rd);
+                const d = self.destRegEff(instr.rd);
                 self.emit(a64.rbit64(d, src));
                 self.emit(a64.clz64(d, d));
                 self.storeVreg(instr.rd, d);
@@ -2824,19 +2875,19 @@ pub const Compiler = struct {
             // --- Conversions ---
             0xA7 => { // i32.wrap_i64
                 const src = self.getOrLoad(instr.rs1, SCRATCH);
-                const d = destReg(instr.rd);
+                const d = self.destRegEff(instr.rd);
                 self.emit(a64.uxtw(d, src));
                 self.storeVreg(instr.rd, d);
             },
             0xAC => { // i64.extend_i32_s
                 const src = self.getOrLoad(instr.rs1, SCRATCH);
-                const d = destReg(instr.rd);
+                const d = self.destRegEff(instr.rd);
                 self.emit(a64.sxtw(d, src));
                 self.storeVreg(instr.rd, d);
             },
             0xAD => { // i64.extend_i32_u
                 const src = self.getOrLoad(instr.rs1, SCRATCH);
-                const d = destReg(instr.rd);
+                const d = self.destRegEff(instr.rd);
                 self.emit(a64.uxtw(d, src));
                 self.storeVreg(instr.rd, d);
             },
@@ -2844,7 +2895,7 @@ pub const Compiler = struct {
             // --- Reinterpret (bit-preserving) ---
             0xBC, 0xBE => { // i32.reinterpret_f32, f32.reinterpret_i32
                 const src = self.getOrLoad(instr.rs1, SCRATCH);
-                const d = destReg(instr.rd);
+                const d = self.destRegEff(instr.rd);
                 self.emit(a64.uxtw(d, src)); // truncate to 32-bit
                 self.storeVreg(instr.rd, d);
             },
@@ -2925,31 +2976,31 @@ pub const Compiler = struct {
             // --- Sign extension (Wasm 2.0) ---
             0xC0 => { // i32.extend8_s — SXTB Wd, Wn
                 const src = self.getOrLoad(instr.rs1, SCRATCH);
-                const d = destReg(instr.rd);
+                const d = self.destRegEff(instr.rd);
                 self.emit(0x13001C00 | (@as(u32, src) << 5) | d);
                 self.storeVreg(instr.rd, d);
             },
             0xC1 => { // i32.extend16_s — SXTH Wd, Wn
                 const src = self.getOrLoad(instr.rs1, SCRATCH);
-                const d = destReg(instr.rd);
+                const d = self.destRegEff(instr.rd);
                 self.emit(0x13003C00 | (@as(u32, src) << 5) | d);
                 self.storeVreg(instr.rd, d);
             },
             0xC2 => { // i64.extend8_s — SXTB Xd, Wn
                 const src = self.getOrLoad(instr.rs1, SCRATCH);
-                const d = destReg(instr.rd);
+                const d = self.destRegEff(instr.rd);
                 self.emit(0x93401C00 | (@as(u32, src) << 5) | d);
                 self.storeVreg(instr.rd, d);
             },
             0xC3 => { // i64.extend16_s — SXTH Xd, Wn
                 const src = self.getOrLoad(instr.rs1, SCRATCH);
-                const d = destReg(instr.rd);
+                const d = self.destRegEff(instr.rd);
                 self.emit(0x93403C00 | (@as(u32, src) << 5) | d);
                 self.storeVreg(instr.rd, d);
             },
             0xC4 => { // i64.extend32_s — SXTW Xd, Wn
                 const src = self.getOrLoad(instr.rs1, SCRATCH);
-                const d = destReg(instr.rd);
+                const d = self.destRegEff(instr.rd);
                 self.emit(a64.sxtw(d, src));
                 self.storeVreg(instr.rd, d);
             },
@@ -2988,7 +3039,7 @@ pub const Compiler = struct {
             regalloc_mod.OP_SUBI32 => self.emitImmOp32(.sub, instr),
             regalloc_mod.OP_MULI32 => {
                 const rs1 = self.getOrLoad(instr.rs1, SCRATCH);
-                const d = destReg(instr.rd);
+                const d = self.destRegEff(instr.rd);
                 self.emit(a64.movz32(SCRATCH2, @truncate(instr.operand), 0));
                 if (instr.operand > 0xFFFF) {
                     self.emit(a64.movk64(SCRATCH2, @truncate(instr.operand >> 16), 1));
@@ -2998,7 +3049,7 @@ pub const Compiler = struct {
             },
             regalloc_mod.OP_ANDI32, regalloc_mod.OP_ORI32, regalloc_mod.OP_XORI32 => {
                 const rs1 = self.getOrLoad(instr.rs1, SCRATCH);
-                const d = destReg(instr.rd);
+                const d = self.destRegEff(instr.rd);
                 self.emit(a64.movz32(SCRATCH2, @truncate(instr.operand), 0));
                 if (instr.operand > 0xFFFF) {
                     self.emit(a64.movk64(SCRATCH2, @truncate(instr.operand >> 16), 1));
@@ -3014,7 +3065,7 @@ pub const Compiler = struct {
             },
             regalloc_mod.OP_SHLI32 => {
                 const rs1 = self.getOrLoad(instr.rs1, SCRATCH);
-                const d = destReg(instr.rd);
+                const d = self.destRegEff(instr.rd);
                 self.emit(a64.movz32(SCRATCH2, @truncate(instr.operand), 0));
                 self.emit(a64.lslv32(d, rs1, SCRATCH2));
                 self.storeVreg(instr.rd, d);
@@ -3034,7 +3085,7 @@ pub const Compiler = struct {
             0x1B => { // select: rd = cond ? val1 : val2
                 const val2_idx = instr.rs2_field;
                 const cond_idx: u16 = @truncate(instr.operand);
-                const d = destReg(instr.rd);
+                const d = self.destRegEff(instr.rd);
                 // Compare condition first (before clobbering scratch regs)
                 const cond_reg = self.getOrLoad(cond_idx, SCRATCH);
                 self.emit(a64.cmpImm32(cond_reg, 0));
@@ -3066,7 +3117,7 @@ pub const Compiler = struct {
             // --- Memory size/grow ---
             0x3F => { // memory.size: rd = memory pages
                 // MEM_SIZE (x28) = memory size in bytes.  pages = bytes >> 16 (PAGE_SIZE=65536)
-                const d = destReg(instr.rd);
+                const d = self.destRegEff(instr.rd);
                 self.emit(a64.lsr64Imm(d, MEM_SIZE, 16));
                 self.storeVreg(instr.rd, d);
             },
@@ -3087,13 +3138,13 @@ pub const Compiler = struct {
 
             // --- ref.null / ref.is_null ---
             regalloc_mod.OP_REF_NULL => {
-                const d = destReg(instr.rd);
+                const d = self.destRegEff(instr.rd);
                 self.emit(a64.movz64(d, 0, 0)); // null ref = 0
                 self.storeVreg(instr.rd, d);
             },
             regalloc_mod.OP_REF_IS_NULL => {
                 const src = self.getOrLoad(instr.rs1, SCRATCH);
-                const d = destReg(instr.rd);
+                const d = self.destRegEff(instr.rd);
                 self.emit(a64.cmp64(src, 31)); // CMP Xn, XZR
                 self.emit(a64.cset64(d, .eq)); // rd = (src == 0) ? 1 : 0
                 self.storeVreg(instr.rd, d);
@@ -3139,7 +3190,7 @@ pub const Compiler = struct {
         }
         const rs1 = self.getOrLoad(instr.rs1, SCRATCH);
         const rs2 = self.getOrLoad(instr.rs2(), SCRATCH2);
-        const d = destReg(instr.rd);
+        const d = self.destRegEff(instr.rd);
         const enc: u32 = switch (op) {
             .add => a64.add32(d, rs1, rs2),
             .sub => a64.sub32(d, rs1, rs2),
@@ -3164,7 +3215,7 @@ pub const Compiler = struct {
         }
         const rs1 = self.getOrLoad(instr.rs1, SCRATCH);
         const rs2 = self.getOrLoad(instr.rs2(), SCRATCH2);
-        const d = destReg(instr.rd);
+        const d = self.destRegEff(instr.rd);
         const enc: u32 = switch (op) {
             .add => a64.add64(d, rs1, rs2),
             .sub => a64.sub64(d, rs1, rs2),
@@ -3189,7 +3240,7 @@ pub const Compiler = struct {
             if (self.known_consts[rs2_vreg]) |c| {
                 if (c <= 0xFFF) {
                     const rs1 = self.getOrLoad(instr.rs1, SCRATCH);
-                    const d = destReg(instr.rd);
+                    const d = self.destRegEff(instr.rd);
                     self.emit(if (op == .add) a64.addImm32(d, rs1, @intCast(c)) else a64.subImm32(d, rs1, @intCast(c)));
                     self.storeVreg(instr.rd, d);
                     return true;
@@ -3201,7 +3252,7 @@ pub const Compiler = struct {
             if (self.known_consts[instr.rs1]) |c| {
                 if (c <= 0xFFF) {
                     const rs2 = self.getOrLoad(rs2_vreg, SCRATCH);
-                    const d = destReg(instr.rd);
+                    const d = self.destRegEff(instr.rd);
                     self.emit(a64.addImm32(d, rs2, @intCast(c)));
                     self.storeVreg(instr.rd, d);
                     return true;
@@ -3218,7 +3269,7 @@ pub const Compiler = struct {
             if (self.known_consts[rs2_vreg]) |c| {
                 if (c <= 0xFFF) {
                     const rs1 = self.getOrLoad(instr.rs1, SCRATCH);
-                    const d = destReg(instr.rd);
+                    const d = self.destRegEff(instr.rd);
                     self.emit(if (op == .add) a64.addImm64(d, rs1, @intCast(c)) else a64.subImm64(d, rs1, @intCast(c)));
                     self.storeVreg(instr.rd, d);
                     return true;
@@ -3229,7 +3280,7 @@ pub const Compiler = struct {
             if (self.known_consts[instr.rs1]) |c| {
                 if (c <= 0xFFF) {
                     const rs2 = self.getOrLoad(rs2_vreg, SCRATCH);
-                    const d = destReg(instr.rd);
+                    const d = self.destRegEff(instr.rd);
                     self.emit(a64.addImm64(d, rs2, @intCast(c)));
                     self.storeVreg(instr.rd, d);
                     return true;
@@ -3278,7 +3329,7 @@ pub const Compiler = struct {
             if (fused) return true;
         } else return false; // OOM
         // No fusion — emit CSET + store
-        const d = destReg(rd);
+        const d = self.destRegEff(rd);
         if (is64) {
             self.emit(a64.cset64(d, cond));
         } else {
@@ -3339,7 +3390,7 @@ pub const Compiler = struct {
 
     fn emitImmOp32(self: *Compiler, op: enum { add, sub }, instr: RegInstr) void {
         const rs1 = self.getOrLoad(instr.rs1, SCRATCH);
-        const d = destReg(instr.rd);
+        const d = self.destRegEff(instr.rd);
         const imm = instr.operand;
         if (imm <= 0xFFF) {
             const enc: u32 = switch (op) {
@@ -3407,7 +3458,7 @@ pub const Compiler = struct {
         }
         const rs1 = self.getOrLoad(instr.rs1, SCRATCH);
         const rs2 = self.getOrLoad(instr.rs2(), SCRATCH2);
-        const d = destReg(instr.rd);
+        const d = self.destRegEff(instr.rd);
         // Check divisor == 0 → DivisionByZero
         self.emit(a64.cmpImm32(rs2, 0));
         self.emitCondError(.eq, 3); // error code 3 = DivisionByZero
@@ -3442,7 +3493,7 @@ pub const Compiler = struct {
         if (divisor & (divisor - 1) == 0) {
             const shift: u5 = @intCast(@ctz(divisor));
             const rs1 = self.getOrLoad(instr.rs1, SCRATCH);
-            const d = destReg(instr.rd);
+            const d = self.destRegEff(instr.rd);
             self.emit(a64.lsr32Imm(d, rs1, shift));
             self.storeVreg(instr.rd, d);
             return true;
@@ -3456,7 +3507,7 @@ pub const Compiler = struct {
         self.scratch_vreg = null; // UMULL clobbers SCRATCH
         // LSR Xscratch, Xscratch, #shift — extract quotient
         self.emit(a64.lsr64Imm(SCRATCH, SCRATCH, m.shift));
-        const d = destReg(instr.rd);
+        const d = self.destRegEff(instr.rd);
         if (d != SCRATCH) self.emit(a64.mov32(d, SCRATCH));
         self.storeVreg(instr.rd, d);
         return true;
@@ -3475,7 +3526,7 @@ pub const Compiler = struct {
         }
         const rs1 = self.getOrLoad(instr.rs1, SCRATCH);
         const rs2 = self.getOrLoad(instr.rs2(), SCRATCH2);
-        const d = destReg(instr.rd);
+        const d = self.destRegEff(instr.rd);
         // Check divisor == 0 → DivisionByZero
         self.emit(a64.cmpImm32(rs2, 0));
         self.emitCondError(.eq, 3);
@@ -3501,7 +3552,7 @@ pub const Compiler = struct {
         // Power of 2: AND with (d-1)
         if (divisor & (divisor - 1) == 0) {
             const rs1 = self.getOrLoad(instr.rs1, SCRATCH);
-            const d = destReg(instr.rd);
+            const d = self.destRegEff(instr.rd);
             self.emitLoadImm(SCRATCH2, divisor - 1);
             self.emit(a64.and32(d, rs1, SCRATCH2));
             self.storeVreg(instr.rd, d);
@@ -3519,7 +3570,7 @@ pub const Compiler = struct {
         self.emit(a64.mul32(SCRATCH, SCRATCH, SCRATCH2));
         // 3. Remainder: r = n - q*d. SCRATCH2 is now free for reloading rs1.
         const rs1b = self.getOrLoad(instr.rs1, SCRATCH2);
-        const d = destReg(instr.rd);
+        const d = self.destRegEff(instr.rd);
         self.emit(a64.sub32(d, rs1b, SCRATCH));
         self.storeVreg(instr.rd, d);
         return true;
@@ -3528,7 +3579,7 @@ pub const Compiler = struct {
     fn emitDiv64(self: *Compiler, sign: Signedness, instr: RegInstr) void {
         const rs1 = self.getOrLoad(instr.rs1, SCRATCH);
         const rs2 = self.getOrLoad(instr.rs2(), SCRATCH2);
-        const d = destReg(instr.rd);
+        const d = self.destRegEff(instr.rd);
         // Check divisor == 0
         self.emit(a64.cmpImm64(rs2, 0));
         self.emitCondError(.eq, 3);
@@ -3558,7 +3609,7 @@ pub const Compiler = struct {
     fn emitRem64(self: *Compiler, sign: Signedness, instr: RegInstr) void {
         const rs1 = self.getOrLoad(instr.rs1, SCRATCH);
         const rs2 = self.getOrLoad(instr.rs2(), SCRATCH2);
-        const d = destReg(instr.rd);
+        const d = self.destRegEff(instr.rd);
         self.emit(a64.cmpImm64(rs2, 0));
         self.emitCondError(.eq, 3);
         // Save rs1 before division when d aliases rs1 — udiv clobbers d,
@@ -3954,7 +4005,7 @@ pub const Compiler = struct {
         // Use FMOV + CNT + ADDV on ARM64 NEON
         // FMOV S0, Wn; CNT V0.8B, V0.8B; ADDV B0, V0.8B; FMOV Wd, S0
         const src = self.getOrLoad(instr.rs1, SCRATCH);
-        const d = destReg(instr.rd);
+        const d = self.destRegEff(instr.rd);
         self.emit(a64.fmovToFp32(FP_SCRATCH0, src)); // FMOV S0, Wn
         self.emit(a64.cntV8b(FP_SCRATCH0, FP_SCRATCH0)); // CNT V0.8B, V0.8B
         self.emit(a64.addvB(FP_SCRATCH0, FP_SCRATCH0)); // ADDV B0, V0.8B
@@ -3965,7 +4016,7 @@ pub const Compiler = struct {
     /// i64.popcnt: count set bits in a 64-bit value
     fn emitPopcnt64(self: *Compiler, instr: RegInstr) void {
         const src = self.getOrLoad(instr.rs1, SCRATCH);
-        const d = destReg(instr.rd);
+        const d = self.destRegEff(instr.rd);
         self.emit(a64.fmovToFp64(FP_SCRATCH0, src)); // FMOV D0, Xn
         self.emit(a64.cntV8b(FP_SCRATCH0, FP_SCRATCH0)); // CNT V0.8B, V0.8B
         self.emit(a64.addvB(FP_SCRATCH0, FP_SCRATCH0)); // ADDV B0, V0.8B
@@ -4267,15 +4318,31 @@ pub const Compiler = struct {
 
     /// Compute the base address of simd_v128[vreg] into SCRATCH.
     /// simd_v128 is [512][2]u64 align(16), so each entry is 16 bytes.
+    /// When simd_base_cached, uses SIMD_BASE_REG (x17) as pre-computed base,
+    /// reducing from 3-4 instructions to 1-2.
     fn emitSimdV128Addr(self: *Compiler, vreg: u16) void {
-        self.emitLoadVmPtr(SCRATCH);
-        const byte_offset = self.simd_v128_offset + @as(u32, vreg) * 16;
-        if (byte_offset <= 4095) {
-            self.emit(a64.addImm64(SCRATCH, SCRATCH, @intCast(byte_offset)));
+        if (self.simd_base_cached) {
+            // SIMD_BASE_REG holds vm_ptr + simd_v128_offset, just add vreg*16
+            const vreg_offset = @as(u32, vreg) * 16;
+            if (vreg_offset == 0) {
+                self.emit(a64.mov64(SCRATCH, SIMD_BASE_REG));
+            } else if (vreg_offset <= 4095) {
+                self.emit(a64.addImm64(SCRATCH, SIMD_BASE_REG, @intCast(vreg_offset)));
+            } else {
+                const offset_instrs = a64.loadImm64(SCRATCH, vreg_offset);
+                for (offset_instrs) |inst| self.emit(inst);
+                self.emit(a64.add64(SCRATCH, SIMD_BASE_REG, SCRATCH));
+            }
         } else {
-            const offset_instrs = a64.loadImm64(SCRATCH2, byte_offset);
-            for (offset_instrs) |inst| self.emit(inst);
-            self.emit(a64.add64(SCRATCH, SCRATCH, SCRATCH2));
+            self.emitLoadVmPtr(SCRATCH);
+            const byte_offset = self.simd_v128_offset + @as(u32, vreg) * 16;
+            if (byte_offset <= 4095) {
+                self.emit(a64.addImm64(SCRATCH, SCRATCH, @intCast(byte_offset)));
+            } else {
+                const offset_instrs = a64.loadImm64(SCRATCH2, byte_offset);
+                for (offset_instrs) |inst| self.emit(inst);
+                self.emit(a64.add64(SCRATCH, SCRATCH, SCRATCH2));
+            }
         }
     }
 
@@ -4422,7 +4489,7 @@ pub const Compiler = struct {
             // Upper-half lanes (B>=8, H>=4, S>=2) use direct memory load
             // from simd_v128 storage instead.
             0x15 => { // i8x16.extract_lane_s
-                const d = destReg(instr.rd);
+                const d = self.destRegEff(instr.rd);
                 const lane: u4 = @truncate(extra);
                 if (lane < 8) {
                     self.emitLoadV128(SIMD_SCRATCH0, instr.rs1);
@@ -4435,7 +4502,7 @@ pub const Compiler = struct {
                 return true;
             },
             0x16 => { // i8x16.extract_lane_u
-                const d = destReg(instr.rd);
+                const d = self.destRegEff(instr.rd);
                 const lane: u4 = @truncate(extra);
                 if (lane < 8) {
                     self.emitLoadV128(SIMD_SCRATCH0, instr.rs1);
@@ -4448,7 +4515,7 @@ pub const Compiler = struct {
                 return true;
             },
             0x18 => { // i16x8.extract_lane_s
-                const d = destReg(instr.rd);
+                const d = self.destRegEff(instr.rd);
                 const lane: u3 = @truncate(extra);
                 if (lane < 4) {
                     self.emitLoadV128(SIMD_SCRATCH0, instr.rs1);
@@ -4461,7 +4528,7 @@ pub const Compiler = struct {
                 return true;
             },
             0x19 => { // i16x8.extract_lane_u
-                const d = destReg(instr.rd);
+                const d = self.destRegEff(instr.rd);
                 const lane: u3 = @truncate(extra);
                 if (lane < 4) {
                     self.emitLoadV128(SIMD_SCRATCH0, instr.rs1);
@@ -4475,7 +4542,7 @@ pub const Compiler = struct {
             },
             0x1B, 0x1F => { // i32x4/f32x4.extract_lane
                 self.emitLoadV128(SIMD_SCRATCH0, instr.rs1);
-                const d = destReg(instr.rd);
+                const d = self.destRegEff(instr.rd);
                 const lane: u2 = @truncate(extra);
                 if (lane < 2) {
                     // UMOV Wd, Vn.S[0|1] — Q=0 valid for lower half
@@ -4496,7 +4563,7 @@ pub const Compiler = struct {
             },
             0x1D, 0x21 => { // i64x2/f64x2.extract_lane — UMOV Xd, Vn.D[lane]
                 self.emitLoadV128(SIMD_SCRATCH0, instr.rs1);
-                const d = destReg(instr.rd);
+                const d = self.destRegEff(instr.rd);
                 // UMOV Xd, Vn.D[lane] (Q=1) = 0x4E083C00
                 self.emit(0x4E083C00 | (@as(u32, @as(u1, @truncate(extra))) << 20) | (@as(u32, SIMD_SCRATCH0) << 5) | d);
                 self.storeVreg(instr.rd, d);
@@ -4690,7 +4757,7 @@ pub const Compiler = struct {
                 self.emit(0x6F640400 | (@as(u32, SIMD_SCRATCH0) << 5) | SIMD_SCRATCH1); // USHR V1.2D, V0.2D, #28
                 self.emit(0x6F445400 | (@as(u32, SIMD_SCRATCH1) << 5) | SIMD_SCRATCH0); // SLI V0.2D, V1.2D, #4
                 // Extract and combine: UMOV lo + hi, ORR
-                const d = destReg(instr.rd);
+                const d = self.destRegEff(instr.rd);
                 self.emit(0x0E013C00 | (@as(u32, SIMD_SCRATCH0) << 5) | d); // UMOV Wd, V0.B[0]
                 self.emit(0x0E013C00 | (8 << 17) | (@as(u32, SIMD_SCRATCH0) << 5) | SCRATCH); // UMOV W_SCRATCH, V0.B[8]
                 // ORR Wd, Wd, W_SCRATCH, LSL #8
@@ -4705,7 +4772,7 @@ pub const Compiler = struct {
                 self.emit(0x6F215400 | (@as(u32, SIMD_SCRATCH1) << 5) | SIMD_SCRATCH0); // SLI V0.4S, V1.4S, #1
                 self.emit(0x6F620400 | (@as(u32, SIMD_SCRATCH0) << 5) | SIMD_SCRATCH1); // USHR V1.2D, V0.2D, #30
                 self.emit(0x6F425400 | (@as(u32, SIMD_SCRATCH1) << 5) | SIMD_SCRATCH0); // SLI V0.2D, V1.2D, #2
-                const d = destReg(instr.rd);
+                const d = self.destRegEff(instr.rd);
                 self.emit(0x0E013C00 | (@as(u32, SIMD_SCRATCH0) << 5) | d); // UMOV Wd, V0.B[0]
                 self.emit(0x0E013C00 | (8 << 17) | (@as(u32, SIMD_SCRATCH0) << 5) | SCRATCH); // UMOV W, V0.B[8]
                 self.emit(0x2A000000 | (@as(u32, SCRATCH) << 16) | (4 << 10) | (@as(u32, d) << 5) | d); // ORR Wd, Wd, W, LSL #4
@@ -4717,7 +4784,7 @@ pub const Compiler = struct {
                 self.emit(0x4F210400 | (@as(u32, SIMD_SCRATCH0) << 5) | SIMD_SCRATCH0); // SSHR V0.4S, #31
                 self.emit(0x6F610400 | (@as(u32, SIMD_SCRATCH0) << 5) | SIMD_SCRATCH1); // USHR V1.2D, V0.2D, #31
                 self.emit(0x6F415400 | (@as(u32, SIMD_SCRATCH1) << 5) | SIMD_SCRATCH0); // SLI V0.2D, V1.2D, #1
-                const d = destReg(instr.rd);
+                const d = self.destRegEff(instr.rd);
                 self.emit(0x0E013C00 | (@as(u32, SIMD_SCRATCH0) << 5) | d); // UMOV Wd, V0.B[0]
                 self.emit(0x0E013C00 | (8 << 17) | (@as(u32, SIMD_SCRATCH0) << 5) | SCRATCH); // UMOV W, V0.B[8]
                 self.emit(0x2A000000 | (@as(u32, SCRATCH) << 16) | (2 << 10) | (@as(u32, d) << 5) | d); // ORR Wd, Wd, W, LSL #2
@@ -4727,7 +4794,7 @@ pub const Compiler = struct {
             0xC4 => { // i64x2.bitmask
                 self.emitLoadV128(SIMD_SCRATCH0, instr.rs1);
                 self.emit(0x6F410400 | (@as(u32, SIMD_SCRATCH0) << 5) | SIMD_SCRATCH0); // USHR V0.2D, #63
-                const d = destReg(instr.rd);
+                const d = self.destRegEff(instr.rd);
                 self.emit(0x0E043C00 | (@as(u32, SIMD_SCRATCH0) << 5) | d); // UMOV Wd, V0.S[0]
                 // V0.S[2] = low 32 bits of V0.D[1] (lane index 2 for .S)
                 self.emit(0x0E043C00 | (@as(u32, 2) << 21) | (@as(u32, SIMD_SCRATCH0) << 5) | SCRATCH); // UMOV W, V0.S[2]
@@ -4742,7 +4809,7 @@ pub const Compiler = struct {
                 // UMAXV Bd, V0.16B = 0x6E30A800
                 self.emit(0x6E30A800 | (@as(u32, SIMD_SCRATCH0) << 5) | SIMD_SCRATCH0);
                 // UMOV Wd, V0.B[0] = 0x0E013C00
-                const d = destReg(instr.rd);
+                const d = self.destRegEff(instr.rd);
                 self.emit(0x0E013C00 | (@as(u32, SIMD_SCRATCH0) << 5) | d);
                 // CMP Wd, #0 → CSET Wd, ne
                 self.emit(a64.cmpImm32(d, 0));
@@ -4756,7 +4823,7 @@ pub const Compiler = struct {
                 self.emitLoadV128(SIMD_SCRATCH0, instr.rs1);
                 // UMINV Bd, V0.16B = 0x6E31A800
                 self.emit(0x6E31A800 | (@as(u32, SIMD_SCRATCH0) << 5) | SIMD_SCRATCH0);
-                const d = destReg(instr.rd);
+                const d = self.destRegEff(instr.rd);
                 self.emit(0x0E013C00 | (@as(u32, SIMD_SCRATCH0) << 5) | d); // UMOV Wd, V0.B[0]
                 self.emit(a64.cmpImm32(d, 0));
                 self.emit(a64.cset32(d, .ne));
@@ -4767,7 +4834,7 @@ pub const Compiler = struct {
                 self.emitLoadV128(SIMD_SCRATCH0, instr.rs1);
                 // UMINV Hd, V0.8H = 0x6E71A800
                 self.emit(0x6E71A800 | (@as(u32, SIMD_SCRATCH0) << 5) | SIMD_SCRATCH0);
-                const d = destReg(instr.rd);
+                const d = self.destRegEff(instr.rd);
                 self.emit(0x0E023C00 | (@as(u32, SIMD_SCRATCH0) << 5) | d); // UMOV Wd, V0.H[0]
                 self.emit(a64.cmpImm32(d, 0));
                 self.emit(a64.cset32(d, .ne));
@@ -4778,7 +4845,7 @@ pub const Compiler = struct {
                 self.emitLoadV128(SIMD_SCRATCH0, instr.rs1);
                 // UMINV Sd, V0.4S = 0x6EB1A800
                 self.emit(0x6EB1A800 | (@as(u32, SIMD_SCRATCH0) << 5) | SIMD_SCRATCH0);
-                const d = destReg(instr.rd);
+                const d = self.destRegEff(instr.rd);
                 self.emit(0x0E043C00 | (@as(u32, SIMD_SCRATCH0) << 5) | d); // UMOV Wd, V0.S[0]
                 self.emit(a64.cmpImm32(d, 0));
                 self.emit(a64.cset32(d, .ne));
@@ -4791,7 +4858,7 @@ pub const Compiler = struct {
                 self.emit(0x4EE09800 | (@as(u32, SIMD_SCRATCH0) << 5) | SIMD_SCRATCH0);
                 // UMAXV Bd, V0.16B → if any byte set, a lane was zero
                 self.emit(0x6E30A800 | (@as(u32, SIMD_SCRATCH0) << 5) | SIMD_SCRATCH0);
-                const d = destReg(instr.rd);
+                const d = self.destRegEff(instr.rd);
                 self.emit(0x0E013C00 | (@as(u32, SIMD_SCRATCH0) << 5) | d); // UMOV Wd, V0.B[0]
                 self.emit(a64.cmpImm32(d, 0));
                 self.emit(a64.cset32(d, .eq)); // eq means no zero lanes found → all_true
@@ -6168,7 +6235,7 @@ pub const Compiler = struct {
         //     matching the same ordering as emitCall (step 5a there).
         // Use the actual call's n_results (not self.result_count) — void calls
         // must NOT load the callee's result into rd, which would corrupt a live vreg.
-        const rd_phys = if (n_results > 0) vregToPhys(rd) else null;
+        const rd_phys = if (n_results > 0) self.vregToPhysEff(rd) else null;
         const rd_callee_saved = if (rd_phys) |p| (p >= 19 and p <= 28) else false;
 
         // 11a. Callee-saved result: load before BLR (survives BLR since callee-saved).
@@ -6212,7 +6279,7 @@ pub const Compiler = struct {
     /// Copy a single arg directly from physical register to callee frame.
     /// Uses physical reg if available, otherwise loads from memory via SCRATCH2.
     fn emitArgCopyDirect(self: *Compiler, callee_base: u5, src_vreg: u16, offset: u16) void {
-        if (vregToPhys(src_vreg)) |phys| {
+        if (self.vregToPhysEff(src_vreg)) |phys| {
             self.emit(a64.str64(phys, callee_base, offset));
         } else {
             self.emit(a64.ldr64(SCRATCH2, REGS_PTR, @as(u16, src_vreg) * 8));
@@ -6279,7 +6346,7 @@ pub const Compiler = struct {
         const dn = self.fpLoadToDreg(instr.rs1);
         const dm = self.fpLoadToDreg(instr.rs2());
         self.emit(a64.fcmp64(dn, dm));
-        const d = destReg(instr.rd);
+        const d = self.destRegEff(instr.rd);
         self.emit(a64.cset32(d, cond));
         self.storeVreg(instr.rd, d);
     }
@@ -6301,7 +6368,7 @@ pub const Compiler = struct {
             else => unreachable,
         };
         self.emit(enc);
-        const d = destReg(instr.rd);
+        const d = self.destRegEff(instr.rd);
         self.emit(a64.fmovToGp32(d, FP_SCRATCH0));
         self.storeVreg(instr.rd, d);
     }
@@ -6314,7 +6381,7 @@ pub const Compiler = struct {
         self.emit(a64.fmovToFp32(FP_SCRATCH0, rs1));
         self.emit(a64.fmovToFp32(FP_SCRATCH1, rs2));
         self.emit(fpOp(FP_SCRATCH0, FP_SCRATCH0, FP_SCRATCH1));
-        const d = destReg(instr.rd);
+        const d = self.destRegEff(instr.rd);
         self.emit(a64.fmovToGp32(d, FP_SCRATCH0));
         self.storeVreg(instr.rd, d);
     }
@@ -6325,7 +6392,7 @@ pub const Compiler = struct {
         const src = self.getOrLoad(instr.rs1, SCRATCH);
         self.emit(a64.fmovToFp32(FP_SCRATCH0, src));
         self.emit(fpOp(FP_SCRATCH0, FP_SCRATCH0));
-        const d = destReg(instr.rd);
+        const d = self.destRegEff(instr.rd);
         self.emit(a64.fmovToGp32(d, FP_SCRATCH0));
         self.storeVreg(instr.rd, d);
     }
@@ -6338,7 +6405,7 @@ pub const Compiler = struct {
         self.emit(a64.fmovToFp32(FP_SCRATCH0, rs1));
         self.emit(a64.fmovToFp32(FP_SCRATCH1, rs2));
         self.emit(a64.fcmp32(FP_SCRATCH0, FP_SCRATCH1));
-        const d = destReg(instr.rd);
+        const d = self.destRegEff(instr.rd);
         self.emit(a64.cset32(d, cond));
         self.storeVreg(instr.rd, d);
     }
@@ -6392,7 +6459,7 @@ pub const Compiler = struct {
         self.fpCacheEvictAll();
         const src = self.getOrLoad(instr.rs1, SCRATCH);
         self.emit(0x1E220000 | (@as(u32, src) << 5) | FP_SCRATCH0);
-        const d = destReg(instr.rd);
+        const d = self.destRegEff(instr.rd);
         self.emit(a64.fmovToGp32(d, FP_SCRATCH0));
         self.storeVreg(instr.rd, d);
     }
@@ -6402,7 +6469,7 @@ pub const Compiler = struct {
         self.fpCacheEvictAll();
         const src = self.getOrLoad(instr.rs1, SCRATCH);
         self.emit(0x1E230000 | (@as(u32, src) << 5) | FP_SCRATCH0);
-        const d = destReg(instr.rd);
+        const d = self.destRegEff(instr.rd);
         self.emit(a64.fmovToGp32(d, FP_SCRATCH0));
         self.storeVreg(instr.rd, d);
     }
@@ -6412,7 +6479,7 @@ pub const Compiler = struct {
         self.fpCacheEvictAll();
         const src = self.getOrLoad(instr.rs1, SCRATCH);
         self.emit(0x9E220000 | (@as(u32, src) << 5) | FP_SCRATCH0);
-        const d = destReg(instr.rd);
+        const d = self.destRegEff(instr.rd);
         self.emit(a64.fmovToGp32(d, FP_SCRATCH0));
         self.storeVreg(instr.rd, d);
     }
@@ -6422,7 +6489,7 @@ pub const Compiler = struct {
         self.fpCacheEvictAll();
         const src = self.getOrLoad(instr.rs1, SCRATCH);
         self.emit(0x9E230000 | (@as(u32, src) << 5) | FP_SCRATCH0);
-        const d = destReg(instr.rd);
+        const d = self.destRegEff(instr.rd);
         self.emit(a64.fmovToGp32(d, FP_SCRATCH0));
         self.storeVreg(instr.rd, d);
     }
@@ -6440,7 +6507,7 @@ pub const Compiler = struct {
             self.emit(a64.fmovToFp64(FP_SCRATCH0, src));
             self.emit(a64.fcvt_s_d(FP_SCRATCH0, FP_SCRATCH0));
         }
-        const d = destReg(instr.rd);
+        const d = self.destRegEff(instr.rd);
         self.emit(a64.fmovToGp32(d, FP_SCRATCH0));
         self.storeVreg(instr.rd, d);
     }
@@ -6451,7 +6518,7 @@ pub const Compiler = struct {
     fn emitFpCopysign32(self: *Compiler, instr: RegInstr) void {
         const a = self.getOrLoad(instr.rs1, SCRATCH);
         const b_reg = self.getOrLoad(instr.rs2(), SCRATCH2);
-        const d = destReg(instr.rd);
+        const d = self.destRegEff(instr.rd);
         // Load 0x7FFFFFFF into a temp
         self.emit(a64.movz64(SCRATCH, 0xFFFF, 0));
         self.emit(a64.movk64(SCRATCH, 0x7FFF, 1));
@@ -6468,7 +6535,7 @@ pub const Compiler = struct {
     fn emitFpCopysign64(self: *Compiler, instr: RegInstr) void {
         const a = self.getOrLoad(instr.rs1, SCRATCH);
         const b_reg = self.getOrLoad(instr.rs2(), SCRATCH2);
-        const d = destReg(instr.rd);
+        const d = self.destRegEff(instr.rd);
         // Load 0x7FFFFFFFFFFFFFFF (abs mask)
         for (a64.loadImm64(SCRATCH, 0x7FFFFFFFFFFFFFFF)) |inst| self.emit(inst);
         self.emit(a64.and64(d, a, SCRATCH)); // d = a & abs_mask
@@ -6494,7 +6561,7 @@ pub const Compiler = struct {
         const src = self.getOrLoad(instr.rs1, SCRATCH);
         self.emit(a64.fmovToFp32(FP_SCRATCH0, src));
         self.emit(encoding | (@as(u32, FP_SCRATCH0) << 5) | FP_SCRATCH0);
-        const d = destReg(instr.rd);
+        const d = self.destRegEff(instr.rd);
         self.emit(a64.fmovToGp32(d, FP_SCRATCH0));
         self.storeVreg(instr.rd, d);
     }
@@ -6541,7 +6608,7 @@ pub const Compiler = struct {
                 self.emitCondError(.ge, 8); // overflow
             }
             // Convert
-            const d = destReg(instr.rd);
+            const d = self.destRegEff(instr.rd);
             if (is_f64) {
                 self.emit(a64.fcvtzs_w_d(d, FP_SCRATCH0));
             } else {
@@ -6573,7 +6640,7 @@ pub const Compiler = struct {
                 self.emit(a64.fcmp32(FP_SCRATCH0, FP_SCRATCH1));
                 self.emitCondError(.ge, 8);
             }
-            const d = destReg(instr.rd);
+            const d = self.destRegEff(instr.rd);
             if (is_f64) {
                 self.emit(a64.fcvtzu_w_d(d, FP_SCRATCH0));
             } else {
@@ -6629,7 +6696,7 @@ pub const Compiler = struct {
                 self.emit(a64.fcmp32(FP_SCRATCH0, FP_SCRATCH1));
                 self.emitCondError(.ls, 8);
             }
-            const d = destReg(instr.rd);
+            const d = self.destRegEff(instr.rd);
             if (is_f64) {
                 self.emit(a64.fcvtzs_x_d(d, FP_SCRATCH0));
             } else {
@@ -6661,7 +6728,7 @@ pub const Compiler = struct {
                 self.emit(a64.fcmp32(FP_SCRATCH0, FP_SCRATCH1));
                 self.emitCondError(.ge, 8);
             }
-            const d = destReg(instr.rd);
+            const d = self.destRegEff(instr.rd);
             if (is_f64) {
                 self.emit(a64.fcvtzu_x_d(d, FP_SCRATCH0));
             } else {
@@ -6725,7 +6792,7 @@ pub const Compiler = struct {
             self.emit(a64.stpPre(29, 30, 31, -2)); // STP x29, x30, [sp, #-16]!
 
             // Spill caller-saved vregs to memory (x2-x7 = r14-r19, x9-x15 = r5-r11)
-            const max: u8 = @intCast(@min(self.reg_count, MAX_PHYS_REGS));
+            const max: u8 = @intCast(@min(self.reg_count, self.effectiveMaxRegs()));
             if (max > 5) {
                 for (5..max) |i| {
                     const vreg: u16 = @intCast(i);
@@ -6759,6 +6826,8 @@ pub const Compiler = struct {
                     }
                 }
             }
+            // Reload SIMD base (x17 is caller-saved, trashed by BLR)
+            if (self.simd_base_cached) self.emitLoadSimdBase();
 
             // Restore x30 and return to continue execution
             self.emit(a64.ldpPost(29, 30, 31, 2)); // LDP x29, x30, [sp], #16
