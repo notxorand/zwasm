@@ -91,6 +91,24 @@ then const/load/store, then spill/reload, then x86.
 - `src/predecode.zig`: `SIMD_BASE` opcode range (0xFD00+)
 - `src/vm.zig`: interpreter SIMD execution (reference for semantics)
 
+### SIMD Performance Analysis (2026-03-26)
+
+**Q-cache (W44) is architecturally correct but underperforming in loops.**
+
+Root cause: `evictAllCaches()` at every branch target (including loop headers).
+Each loop iteration flushes all Q regs to simd_v128[] and reloads from memory.
+Wasmtime (Cranelift) keeps v128 in registers across loop iterations.
+
+- ARM64 native SIMD coverage: 247/276 ops (89%) — trampoline is NOT the bottleneck
+- Mandelbrot inner loop: 12 NEON ops + 12 loads + 12 stores per iter (should be 12 NEON only)
+- zwasm SIMD slower than scalar (eviction overhead > SIMD benefit)
+
+**Fix path (ordered by impact)**:
+1. Loop-header Q-reg persistence (don't evict at backedge targets) → 2-3x
+2. v128.load/store guard pages (skip bounds check) → 1.5-2x
+3. FMLA fusion (fused multiply-add) → 1.2-1.5x
+4. Realistic target: 5-15x of wasmtime (from current 38-248x)
+
 ### Open Work Items
 
 | Item       | Description                                       | Status         |

@@ -138,6 +138,11 @@ BENCHMARKS=(
   "simd_freq_v:bench/wasm/simd/byte_freq.wasm::simd:wasi_args"
   "simd_nbody_s:bench/wasm/simd/nbody_simd.wasm::scalar:wasi_args"
   "simd_nbody_v:bench/wasm/simd/nbody_simd.wasm::simd:wasi_args"
+  "simd_mandel_s:bench/wasm/simd/mandelbrot.wasm::scalar:wasi_args"
+  "simd_mandel_v:bench/wasm/simd/mandelbrot.wasm::simd:wasi_args"
+  "simd_matmul_s:bench/wasm/simd/matmul.wasm::scalar:wasi_args"
+  "simd_matmul_v:bench/wasm/simd/matmul.wasm::simd:wasi_args"
+  "simd_chain:bench/wasm/simd/simd_chain.wasm:::wasi"
 )
 
 RUNS=5
