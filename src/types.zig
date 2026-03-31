@@ -452,14 +452,14 @@ pub const WasmModule = struct {
 
     /// Invoke an exported function by name.
     /// Args and results are passed as u64 arrays.
-    pub fn invoke(self: *WasmModule, name: []const u8, args: []u64, results: []u64) !void {
+    pub fn invoke(self: *WasmModule, name: []const u8, args: []const u64, results: []u64) !void {
         self.vm.reset();
         try self.vm.invoke(&self.instance, name, args, results);
     }
 
     /// Invoke using only the stack-based interpreter, bypassing RegIR and JIT.
     /// Used by differential testing to get a reference result.
-    pub fn invokeInterpreterOnly(self: *WasmModule, name: []const u8, args: []u64, results: []u64) !void {
+    pub fn invokeInterpreterOnly(self: *WasmModule, name: []const u8, args: []const u64, results: []u64) !void {
         self.vm.reset();
         self.vm.force_interpreter = true;
         defer self.vm.force_interpreter = false;

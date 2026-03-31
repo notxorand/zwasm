@@ -398,7 +398,7 @@ export fn zwasm_module_validate(wasm_ptr: [*]const u8, len: usize) bool {
 export fn zwasm_module_invoke(
     module: *zwasm_module_t,
     name_ptr: [*:0]const u8,
-    args: ?[*]u64,
+    args: ?[*]const u64,
     nargs: u32,
     results: ?[*]u64,
     nresults: u32,
@@ -406,7 +406,7 @@ export fn zwasm_module_invoke(
     clearError();
     const name = std.mem.sliceTo(name_ptr, 0);
     var empty = [_]u64{};
-    const args_slice: []u64 = if (args) |a| a[0..nargs] else &empty;
+    const args_slice: []const u64 = if (args) |a| a[0..nargs] else &empty;
     const results_slice: []u64 = if (results) |r| r[0..nresults] else &empty;
     module.module.invoke(name, args_slice, results_slice) catch |err| {
         setError(err);

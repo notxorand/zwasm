@@ -173,7 +173,7 @@ bool zwasm_module_validate(const uint8_t *wasm_ptr, size_t len);
  * @return true on success, false on error.
  */
 bool zwasm_module_invoke(zwasm_module_t *module, const char *name,
-                         uint64_t *args, uint32_t nargs,
+                         const uint64_t *args, uint32_t nargs,
                          uint64_t *results, uint32_t nresults);
 
 /**
