@@ -1721,7 +1721,7 @@ fn loadAndExercise(alloc: Allocator, wasm: []const u8) void {
 
         // Call multiple times to trigger JIT compilation
         for (0..FUZZ_JIT_CALLS) |_| {
-            module.vm.fuel = FUZZ_FUEL;
+            module.fuel = FUZZ_FUEL;
             module.invoke(ei.name, arg_slice, result_slice) catch break;
         }
     }

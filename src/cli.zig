@@ -309,6 +309,13 @@ fn cmdRun(allocator: Allocator, args: []const []const u8, stdout: *std.Io.Writer
         func_args_start = args.len;
     }
 
+    const base_cfg = types.WasmModule.Config{
+        .fuel = fuel,
+        .timeout_ms = timeout_ms,
+        .max_memory_bytes = max_memory_bytes,
+        .force_interpreter = force_interpreter,
+    };
+
     const path = wasm_path orelse {
         try stderr.print("error: no wasm file specified\n", .{});
         try stderr.flush();
@@ -349,22 +356,25 @@ fn cmdRun(allocator: Allocator, args: []const []const u8, stdout: *std.Io.Writer
             return false;
         };
         // Load with already-loaded linked modules as imports (transitive chains)
-        const lm = if (import_entries.items.len > 0)
-            types.WasmModule.loadWithImports(allocator, link_bytes, import_entries.items) catch
-                // Retry without imports if the linked module doesn't need them
-                types.WasmModule.load(allocator, link_bytes) catch |err| {
-                allocator.free(link_bytes);
-                try stderr.print("error: failed to load linked module '{s}': {s}\n", .{ lpath, formatWasmError(err) });
-                try stderr.flush();
-                return false;
+        var cfg = base_cfg;
+        cfg.imports = import_entries.items;
+        const lm = types.WasmModule.loadWithOptions(allocator, link_bytes, cfg) catch |err| blk: {
+            // Retry without imports if the linked module doesn't need them
+            if (err == error.ImportNotFound and cfg.imports.len > 0) {
+                var retry_cfg = base_cfg;
+                retry_cfg.imports = &.{};
+                break :blk types.WasmModule.loadWithOptions(allocator, link_bytes, retry_cfg) catch |retry_err| {
+                    allocator.free(link_bytes);
+                    try stderr.print("error: failed to load linked module '{s}': {s}\n", .{ lpath, formatWasmError(retry_err) });
+                    try stderr.flush();
+                    return false;
+                };
             }
-        else
-            types.WasmModule.load(allocator, link_bytes) catch |err| {
-                allocator.free(link_bytes);
-                try stderr.print("error: failed to load linked module '{s}': {s}\n", .{ lpath, formatWasmError(err) });
-                try stderr.flush();
-                return false;
-            };
+            allocator.free(link_bytes);
+            try stderr.print("error: failed to load linked module '{s}': {s}\n", .{ lpath, formatWasmError(err) });
+            try stderr.flush();
+            return false;
+        };
         try linked_bytes.append(allocator, link_bytes);
         try linked_modules.append(allocator, lm);
         try import_entries.append(allocator, .{
@@ -374,7 +384,7 @@ fn cmdRun(allocator: Allocator, args: []const []const u8, stdout: *std.Io.Writer
     }
 
     if (batch_mode) {
-        return cmdBatch(allocator, wasm_bytes, import_entries.items, link_names.items, linked_modules.items, stdout, stderr, trace_categories, dump_regir_func, dump_jit_func);
+        return cmdBatch(allocator, wasm_bytes, import_entries.items, link_names.items, linked_modules.items, stdout, stderr, trace_categories, dump_regir_func, dump_jit_func, base_cfg);
     }
 
     const imports_slice: ?[]const types.ImportEntry = if (import_entries.items.len > 0)
@@ -395,11 +405,22 @@ fn cmdRun(allocator: Allocator, args: []const []const u8, stdout: *std.Io.Writer
         };
 
         const module = load_blk: {
-            if (imports_slice != null) {
+            const wasi_cfg = blk: {
+                var c = base_cfg;
+                c.wasi = true;
+                c.wasi_options = wasi_opts;
+                break :blk c;
+            };
+
+            if (import_entries.items.len > 0) {
                 // With --link: try imports only, then imports + WASI
-                break :load_blk types.WasmModule.loadWithImports(allocator, wasm_bytes, imports_slice.?) catch |err| {
+                var imports_only_cfg = base_cfg;
+                imports_only_cfg.imports = imports_slice.?;
+                break :load_blk types.WasmModule.loadWithOptions(allocator, wasm_bytes, imports_only_cfg) catch |err| {
                     if (err == error.ImportNotFound) {
-                        break :load_blk types.WasmModule.loadWasiWithImports(allocator, wasm_bytes, imports_slice, wasi_opts) catch |err2| {
+                        var imports_wasi_cfg = wasi_cfg;
+                        imports_wasi_cfg.imports = imports_slice.?;
+                        break :load_blk types.WasmModule.loadWithOptions(allocator, wasm_bytes, imports_wasi_cfg) catch |err2| {
                             try stderr.print("error: failed to load module: {s}\n", .{formatWasmError(err2)});
                             try stderr.flush();
                             return false;
@@ -411,9 +432,10 @@ fn cmdRun(allocator: Allocator, args: []const []const u8, stdout: *std.Io.Writer
                 };
             }
             // No --link: try plain, then WASI
-            break :load_blk types.WasmModule.load(allocator, wasm_bytes) catch |err| {
+            const plain_cfg = base_cfg;
+            break :load_blk types.WasmModule.loadWithOptions(allocator, wasm_bytes, plain_cfg) catch |err| {
                 if (err == error.ImportNotFound) {
-                    break :load_blk types.WasmModule.loadWasiWithOptions(allocator, wasm_bytes, wasi_opts) catch |err2| {
+                    break :load_blk types.WasmModule.loadWithOptions(allocator, wasm_bytes, wasi_cfg) catch |err2| {
                         try stderr.print("error: failed to load module: {s}\n", .{formatWasmError(err2)});
                         try stderr.flush();
                         return false;
@@ -455,12 +477,6 @@ fn cmdRun(allocator: Allocator, args: []const []const u8, stdout: *std.Io.Writer
         if (trace_categories != 0 or dump_regir_func != null or dump_jit_func != null) {
             module.vm.trace = &trace_config;
         }
-
-        // Apply resource limits
-        module.vm.max_memory_bytes = max_memory_bytes;
-        module.fuel = fuel;
-        module.timeout_ms = timeout_ms;
-        module.force_interpreter = force_interpreter;
 
         // Lookup export info for type-aware parsing and validation
         const export_info = module.getExportInfo(func_name);
@@ -564,15 +580,20 @@ fn cmdRun(allocator: Allocator, args: []const []const u8, stdout: *std.Io.Writer
             try wasi_args_list.append(allocator, @ptrCast(a));
         }
 
-        // Run as WASI module (_start), with --link imports if provided
-        const wasi_opts2: types.WasiOptions = .{
+        const wasi_opts: types.WasiOptions = .{
             .args = wasi_args_list.items,
             .env_keys = env_keys.items,
             .env_vals = env_vals.items,
             .preopen_paths = preopen_paths.items,
             .caps = caps,
         };
-        var module = types.WasmModule.loadWasiWithImports(allocator, wasm_bytes, imports_slice, wasi_opts2) catch |err| {
+
+        // Run as WASI module (_start), with --link imports if provided
+        var cfg = base_cfg;
+        cfg.wasi = true;
+        cfg.wasi_options = wasi_opts;
+        cfg.imports = imports_slice orelse &.{};
+        var module = types.WasmModule.loadWithOptions(allocator, wasm_bytes, cfg) catch |err| {
             try stderr.print("error: failed to load WASI module: {s}\n", .{formatWasmError(err)});
             try stderr.flush();
             return false;
@@ -604,12 +625,6 @@ fn cmdRun(allocator: Allocator, args: []const []const u8, stdout: *std.Io.Writer
         if (trace_categories != 0 or dump_regir_func != null or dump_jit_func != null) {
             module.vm.trace = &wasi_trace_config;
         }
-
-        // Apply resource limits
-        module.vm.max_memory_bytes = max_memory_bytes;
-        module.fuel = fuel;
-        module.timeout_ms = timeout_ms;
-        module.force_interpreter = force_interpreter;
 
         var no_args = [_]u64{};
         var no_results = [_]u64{};
@@ -671,7 +686,7 @@ fn cmdCompile(allocator: Allocator, args: []const []const u8, stdout: *std.Io.Wr
     defer allocator.free(wasm_bytes);
 
     // Load module (with WASI to handle any imports)
-    var module = types.WasmModule.loadWasi(allocator, wasm_bytes) catch |err| {
+    var module = types.WasmModule.loadWithOptions(allocator, wasm_bytes, .{ .wasi = true }) catch |err| {
         try stderr.print("error: failed to load module: {s}\n", .{formatWasmError(err)});
         try stderr.flush();
         return false;
@@ -1234,20 +1249,15 @@ fn threadRunner(ctx: *ThreadCtx) void {
 /// Batch mode: read invocations from stdin, one per line.
 /// Protocol: "invoke <func> [arg1 arg2 ...]"
 /// Output: "ok [val1 val2 ...]" or "error <message>"
-fn cmdBatch(allocator: Allocator, wasm_bytes: []const u8, imports: []const types.ImportEntry, link_names: []const []const u8, linked_modules: []const *types.WasmModule, stdout: *std.Io.Writer, stderr: *std.Io.Writer, trace_categories: u8, dump_regir_func: ?u32, dump_jit_func: ?u32) !bool {
+fn cmdBatch(allocator: Allocator, wasm_bytes: []const u8, imports: []const types.ImportEntry, link_names: []const []const u8, linked_modules: []const *types.WasmModule, stdout: *std.Io.Writer, stderr: *std.Io.Writer, trace_categories: u8, dump_regir_func: ?u32, dump_jit_func: ?u32, base_cfg: types.WasmModule.Config) !bool {
     _ = stderr;
-    var module = if (imports.len > 0)
-        types.WasmModule.loadWithImports(allocator, wasm_bytes, imports) catch |err| {
-            try stdout.print("error load {s}\n", .{@errorName(err)});
-            try stdout.flush();
-            return false;
-        }
-    else
-        types.WasmModule.load(allocator, wasm_bytes) catch |err| {
-            try stdout.print("error load {s}\n", .{@errorName(err)});
-            try stdout.flush();
-            return false;
-        };
+    var cfg = base_cfg;
+    cfg.imports = imports;
+    var module = types.WasmModule.loadWithOptions(allocator, wasm_bytes, cfg) catch |err| {
+        try stdout.print("error load {s}\n", .{@errorName(err)});
+        try stdout.flush();
+        return false;
+    };
     defer module.deinit();
 
     // Enable tracing if requested

@@ -232,24 +232,41 @@ pub const WasmModule = struct {
     vm: *rt.vm_mod.Vm = undefined,
     /// Owned wasm bytes (from WAT conversion). Freed on deinit.
     owned_wasm_bytes: ?[]const u8 = null,
-
-    /// Persistent fuel budget.
+    /// Persistent fuel budget from Config. Decremented across all invocations.
     fuel: ?u64 = null,
-    /// Persistent timeout setting.
+    /// Persistent timeout setting from Config. Applied at start of every invocation.
     timeout_ms: ?u64 = null,
+    /// Persistent memory limit from Config. Applied at start of every invocation.
+    max_memory_bytes: ?u64 = null,
     /// Persistent interpreter-only flag. When non-null, `invoke()` applies this
     /// to `vm.force_interpreter` before each call; when null, `vm.force_interpreter`
     /// is left untouched so callers may set it directly on `self.vm`.
     force_interpreter: ?bool = null,
 
+    /// Configuration for module loading.
+    pub const Config = struct {
+        wasi: bool = false,
+        wasi_options: ?WasiOptions = null,
+        imports: []const ImportEntry = &.{},
+        fuel: ?u64 = null,
+        timeout_ms: ?u64 = null,
+        max_memory_bytes: ?u64 = null,
+        force_interpreter: ?bool = null,
+    };
+
+    /// Load a Wasm module from binary bytes with explicit configuration.
+    pub fn loadWithOptions(allocator: Allocator, wasm_bytes: []const u8, config: Config) !*WasmModule {
+        return loadCore(allocator, wasm_bytes, config);
+    }
+
     /// Load a Wasm module from binary bytes, decode, and instantiate.
     pub fn load(allocator: Allocator, wasm_bytes: []const u8) !*WasmModule {
-        return loadCore(allocator, wasm_bytes, false, null, null, null, null);
+        return loadWithOptions(allocator, wasm_bytes, .{});
     }
 
     /// Load with a fuel limit (traps start function if it exceeds the limit).
     pub fn loadWithFuel(allocator: Allocator, wasm_bytes: []const u8, fuel: u64) !*WasmModule {
-        return loadCore(allocator, wasm_bytes, false, null, fuel, null, null);
+        return loadWithOptions(allocator, wasm_bytes, .{ .fuel = fuel });
     }
 
     /// Load a module from WAT (WebAssembly Text Format) source.
@@ -257,7 +274,7 @@ pub const WasmModule = struct {
     pub fn loadFromWat(allocator: Allocator, wat_source: []const u8) !*WasmModule {
         const wasm_bytes = try rt.wat.watToWasm(allocator, wat_source);
         errdefer allocator.free(wasm_bytes);
-        const self = try loadCore(allocator, wasm_bytes, false, null, null, null, null);
+        const self = try loadWithOptions(allocator, wasm_bytes, .{});
         self.owned_wasm_bytes = wasm_bytes;
         return self;
     }
@@ -266,14 +283,14 @@ pub const WasmModule = struct {
     pub fn loadFromWatWithFuel(allocator: Allocator, wat_source: []const u8, fuel: u64) !*WasmModule {
         const wasm_bytes = try rt.wat.watToWasm(allocator, wat_source);
         errdefer allocator.free(wasm_bytes);
-        const self = try loadCore(allocator, wasm_bytes, false, null, fuel, null, null);
+        const self = try loadWithOptions(allocator, wasm_bytes, .{ .fuel = fuel });
         self.owned_wasm_bytes = wasm_bytes;
         return self;
     }
 
     /// Load a WASI module — registers wasi_snapshot_preview1 imports.
     pub fn loadWasi(allocator: Allocator, wasm_bytes: []const u8) !*WasmModule {
-        return loadCore(allocator, wasm_bytes, true, null, null, null, null);
+        return loadWithOptions(allocator, wasm_bytes, .{ .wasi = true });
     }
 
     /// Apply WasiOptions to a WasiContext (shared logic for all WASI loaders).
@@ -310,23 +327,17 @@ pub const WasmModule = struct {
 
     /// Load a WASI module with custom args, env, and preopened directories.
     pub fn loadWasiWithOptions(allocator: Allocator, wasm_bytes: []const u8, opts: WasiOptions) !*WasmModule {
-        const self = try loadCore(allocator, wasm_bytes, true, null, null, null, null);
-        errdefer self.deinit();
-        if (self.wasi_ctx) |*wc| try applyWasiOptions(wc, opts);
-        return self;
+        return loadWithOptions(allocator, wasm_bytes, .{ .wasi = true, .wasi_options = opts });
     }
 
     /// Load with imports from other modules or host functions.
-    pub fn loadWithImports(allocator: Allocator, wasm_bytes: []const u8, imports: []const ImportEntry) !*WasmModule {
-        return loadCore(allocator, wasm_bytes, false, imports, null, null, null);
+    pub fn loadWithImports(allocator: Allocator, wasm_bytes: []const u8, imports: ?[]const ImportEntry) !*WasmModule {
+        return loadWithOptions(allocator, wasm_bytes, .{ .imports = imports orelse &.{} });
     }
 
     /// Load with combined WASI + import support. Used by CLI for --link + WASI fallback.
     pub fn loadWasiWithImports(allocator: Allocator, wasm_bytes: []const u8, imports: ?[]const ImportEntry, opts: WasiOptions) !*WasmModule {
-        const self = try loadCore(allocator, wasm_bytes, true, imports, null, null, null);
-        errdefer self.deinit();
-        if (self.wasi_ctx) |*wc| try applyWasiOptions(wc, opts);
-        return self;
+        return loadWithOptions(allocator, wasm_bytes, .{ .wasi = true, .wasi_options = opts, .imports = imports orelse &.{} });
     }
 
     /// Register this module's exports in its store under the given module name.
@@ -366,8 +377,9 @@ pub const WasmModule = struct {
         self.owned_wasm_bytes = null;
         self.store = rt.store_mod.Store.init(allocator);
         self.wasi_ctx = null;
-        self.fuel = null;
         self.timeout_ms = null;
+        self.fuel = null;
+        self.max_memory_bytes = null;
         self.force_interpreter = null;
 
         self.module = rt.module_mod.Module.init(allocator, wasm_bytes);
@@ -408,7 +420,7 @@ pub const WasmModule = struct {
         return .{ .module = self, .apply_error = apply_error };
     }
 
-    fn loadCore(allocator: Allocator, wasm_bytes: []const u8, wasi: bool, imports: ?[]const ImportEntry, fuel: ?u64, timeout_ms: ?u64, force_interpreter: ?bool) !*WasmModule {
+    fn loadCore(allocator: Allocator, wasm_bytes: []const u8, config: Config) !*WasmModule {
         const self = try allocator.create(WasmModule);
         errdefer allocator.destroy(self);
 
@@ -421,7 +433,7 @@ pub const WasmModule = struct {
         errdefer self.module.deinit();
         try self.module.decode();
 
-        if (wasi) {
+        if (config.wasi) {
             try rt.wasi.registerAll(&self.store, &self.module);
             self.wasi_ctx = rt.wasi.WasiContext.init(allocator);
             self.wasi_ctx.?.caps = rt.wasi.Capabilities.cli_default;
@@ -430,8 +442,14 @@ pub const WasmModule = struct {
         }
         errdefer if (self.wasi_ctx) |*wc| wc.deinit();
 
-        if (imports) |import_entries| {
-            try registerImports(&self.store, &self.module, import_entries, allocator);
+        if (self.wasi_ctx) |*wc| {
+            if (config.wasi_options) |opts| {
+                try applyWasiOptions(wc, opts);
+            }
+        }
+
+        if (config.imports.len > 0) {
+            try registerImports(&self.store, &self.module, config.imports, allocator);
         }
 
         self.instance = rt.instance_mod.Instance.init(allocator, &self.store, &self.module);
@@ -444,12 +462,16 @@ pub const WasmModule = struct {
         self.wit_funcs = &[_]wit_parser.WitFunc{};
 
         self.vm = try allocator.create(rt.vm_mod.Vm);
-
+        errdefer allocator.destroy(self.vm);
         self.vm.* = rt.vm_mod.Vm.init(allocator);
-
-        self.fuel = fuel;
-        self.timeout_ms = timeout_ms;
-        self.force_interpreter = force_interpreter;
+        self.max_memory_bytes = config.max_memory_bytes;
+        self.force_interpreter = config.force_interpreter;
+        self.timeout_ms = config.timeout_ms;
+        self.fuel = config.fuel;
+        if (self.fuel) |f| self.vm.fuel = f;
+        if (self.max_memory_bytes) |mb| self.vm.max_memory_bytes = mb;
+        if (self.force_interpreter) |fi| self.vm.force_interpreter = fi;
+        if (self.timeout_ms) |ms| self.vm.setDeadlineTimeoutMs(ms);
 
         // Execute start function if present.
         // Only apply persistent settings to the VM when explicitly set — a null
@@ -457,9 +479,11 @@ pub const WasmModule = struct {
         if (self.module.start) |start_idx| {
             self.vm.reset();
             if (self.fuel) |f| self.vm.fuel = f;
+            if (self.max_memory_bytes) |mb| self.vm.max_memory_bytes = mb;
             if (self.force_interpreter) |fi| self.vm.force_interpreter = fi;
             if (self.timeout_ms) |ms| self.vm.setDeadlineTimeoutMs(ms);
             try self.vm.invokeByIndex(&self.instance, start_idx, &.{}, &.{});
+            self.fuel = self.vm.fuel;
         }
 
         return self;
@@ -494,8 +518,10 @@ pub const WasmModule = struct {
     pub fn invoke(self: *WasmModule, name: []const u8, args: []const u64, results: []u64) !void {
         self.vm.reset();
         if (self.fuel) |f| self.vm.fuel = f;
+        if (self.max_memory_bytes) |mb| self.vm.max_memory_bytes = mb;
         if (self.force_interpreter) |fi| self.vm.force_interpreter = fi;
         if (self.timeout_ms) |ms| self.vm.setDeadlineTimeoutMs(ms);
+        defer if (self.fuel != null) { self.fuel = self.vm.fuel; };
         try self.vm.invoke(&self.instance, name, args, results);
     }
 
@@ -507,10 +533,12 @@ pub const WasmModule = struct {
     pub fn invokeInterpreterOnly(self: *WasmModule, name: []const u8, args: []const u64, results: []u64) !void {
         self.vm.reset();
         if (self.fuel) |f| self.vm.fuel = f;
+        if (self.max_memory_bytes) |mb| self.vm.max_memory_bytes = mb;
         if (self.timeout_ms) |ms| self.vm.setDeadlineTimeoutMs(ms);
         const saved_fi = self.vm.force_interpreter;
         self.vm.force_interpreter = true;
         defer self.vm.force_interpreter = saved_fi;
+        defer if (self.fuel != null) { self.fuel = self.vm.fuel; };
         try self.vm.invoke(&self.instance, name, args, results);
     }
 
@@ -1498,4 +1526,20 @@ test "fuel and timeout — persistence and caller-set preservation" {
     try wasm_mod.invoke("f", &.{}, &results);
     try testing.expect(wasm_mod.vm.deadline_ns != null);
     try testing.expectEqual(deadline_before, wasm_mod.vm.deadline_ns);
+}
+
+test "WasmModule.Config applies VM limits" {
+    const wasm_bytes = &[_]u8{ 0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00 };
+    var wasm_mod = try WasmModule.loadWithOptions(testing.allocator, wasm_bytes, .{
+        .fuel = 12345,
+        .timeout_ms = 5000,
+        .max_memory_bytes = 1048576,
+        .force_interpreter = true,
+    });
+    defer wasm_mod.deinit();
+
+    try testing.expectEqual(@as(?u64, 12345), wasm_mod.vm.fuel);
+    try testing.expectEqual(@as(?u64, 1048576), wasm_mod.vm.max_memory_bytes);
+    try testing.expectEqual(true, wasm_mod.vm.force_interpreter);
+    try testing.expect(wasm_mod.vm.deadline_ns != null);
 }
