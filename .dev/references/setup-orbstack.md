@@ -17,7 +17,7 @@ Run inside the VM (`orb run -m my-ubuntu-amd64 bash -lc "..."`):
 sudo apt update && sudo apt install -y build-essential python3 xz-utils curl git rsync
 
 # Zig 0.15.2
-curl -L -o /tmp/zig.tar.xz https://ziglang.org/builds/zig-x86_64-linux-0.15.2.tar.xz
+curl -L -o /tmp/zig.tar.xz https://ziglang.org/download/0.15.2/zig-x86_64-linux-0.15.2.tar.xz
 sudo mkdir -p /opt/zig && sudo tar -xf /tmp/zig.tar.xz -C /opt/zig --strip-components=1
 echo 'export PATH="/opt/zig:$PATH"' >> ~/.bashrc
 
