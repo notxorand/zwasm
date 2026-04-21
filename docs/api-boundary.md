@@ -12,6 +12,7 @@ Types and functions listed here are covered by SemVer guarantees.
 | `WasmValType` | Enum of Wasm value types (i32, i64, f32, f64, v128, funcref, externref) | v0.1.0 |
 | `ExportInfo` | Metadata for an exported function (name, param/result types) | v0.1.0 |
 | `ImportEntry` | Maps an import module name to a source | v0.2.0 |
+| `WasmModule.Config`| Unified loading configuration | vNEXT |
 | `ImportSource` | Union: wasm_module or host_fns | v0.2.0 |
 | `HostFnEntry` | A single host function (name, callback, context) | v0.2.0 |
 | `HostFn` | Function type: `fn (*anyopaque, usize) anyerror!void` | v0.2.0 |
@@ -26,12 +27,13 @@ Types and functions listed here are covered by SemVer guarantees.
 
 | Method | Signature | Since |
 |--------|-----------|-------|
+| `loadWithOptions` | `(Allocator, []const u8, Config) !*WasmModule` | vNEXT |
 | `load` | `(Allocator, []const u8) !*WasmModule` | v0.1.0 |
 | `loadFromWat` | `(Allocator, []const u8) !*WasmModule` | v0.2.0 |
 | `loadWasi` | `(Allocator, []const u8) !*WasmModule` | v0.2.0 |
 | `loadWasiWithOptions` | `(Allocator, []const u8, WasiOptions) !*WasmModule` | v0.2.0 |
-| `loadWithImports` | `(Allocator, []const u8, []const ImportEntry) !*WasmModule` | v0.2.0 |
-| `loadWasiWithImports` | `(Allocator, []const u8, []const ImportEntry, WasiOptions) !*WasmModule` | v0.2.0 |
+| `loadWithImports` | `(Allocator, []const u8, ?[]const ImportEntry) !*WasmModule` | v0.2.0 |
+| `loadWasiWithImports` | `(Allocator, []const u8, ?[]const ImportEntry, WasiOptions) !*WasmModule` | v0.2.0 |
 | `loadWithFuel` | `(Allocator, []const u8, u64) !*WasmModule` | v0.3.0 |
 | `deinit` | `(*WasmModule) void` | v0.1.0 |
 | `invoke` | `(*WasmModule, []const u8, []u64, []u64) !void` | v0.1.0 |

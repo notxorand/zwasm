@@ -93,6 +93,11 @@ const CAllocatorWrapper = struct {
 const CApiConfig = struct {
     c_alloc: ?*CAllocatorWrapper = null,
 
+    fuel: ?u64 = null,
+    timeout_ms: ?u64 = null,
+    max_memory_bytes: ?u64 = null,
+    force_interpreter: ?bool = null,
+
     fn deinit(self: *CApiConfig) void {
         if (self.c_alloc) |ca| page_alloc.destroy(ca);
     }
@@ -101,6 +106,16 @@ const CApiConfig = struct {
     fn getAllocator(self: *CApiConfig) ?std.mem.Allocator {
         if (self.c_alloc) |ca| return ca.allocator();
         return null;
+    }
+
+    /// Build a WasmModule.Config from this C API config.
+    fn toModuleConfig(self: *CApiConfig) types.WasmModule.Config {
+        return .{
+            .fuel = self.fuel,
+            .timeout_ms = self.timeout_ms,
+            .max_memory_bytes = self.max_memory_bytes,
+            .force_interpreter = self.force_interpreter,
+        };
     }
 };
 
@@ -126,40 +141,42 @@ const CApiModule = struct {
     module: *WasmModule,
 
     fn create(wasm_bytes: []const u8, wasi: bool) !*CApiModule {
-        return createWithAllocator(wasm_bytes, wasi, null);
+        return createConfigured(wasm_bytes, wasi, null);
     }
 
-    fn createWithAllocator(wasm_bytes: []const u8, wasi: bool, custom_alloc: ?std.mem.Allocator) !*CApiModule {
+    fn createConfigured(wasm_bytes: []const u8, wasi: bool, config: ?*CApiConfig) !*CApiModule {
         const self = try std.heap.page_allocator.create(CApiModule);
         errdefer std.heap.page_allocator.destroy(self);
 
-        const allocator = custom_alloc orelse default_allocator;
+        const allocator = if (config) |c| c.getAllocator() orelse default_allocator else default_allocator;
+        var mod_cfg = if (config) |c| c.toModuleConfig() else types.WasmModule.Config{};
+        mod_cfg.wasi = wasi;
 
-        self.module = if (wasi)
-            try WasmModule.loadWasi(allocator, wasm_bytes)
-        else
-            try WasmModule.load(allocator, wasm_bytes);
+        self.module = try WasmModule.loadWithOptions(allocator, wasm_bytes, mod_cfg);
         return self;
     }
 
     fn createWasiConfigured(wasm_bytes: []const u8, opts: WasiOptions) !*CApiModule {
-        return createWasiConfiguredWithAllocator(wasm_bytes, opts, null);
+        return createWasiConfiguredEx(wasm_bytes, opts, null);
     }
 
-    fn createWasiConfiguredWithAllocator(wasm_bytes: []const u8, opts: WasiOptions, custom_alloc: ?std.mem.Allocator) !*CApiModule {
+    fn createWasiConfiguredEx(wasm_bytes: []const u8, opts: WasiOptions, config: ?*CApiConfig) !*CApiModule {
         const self = try std.heap.page_allocator.create(CApiModule);
         errdefer std.heap.page_allocator.destroy(self);
 
-        const allocator = custom_alloc orelse default_allocator;
+        const allocator = if (config) |c| c.getAllocator() orelse default_allocator else default_allocator;
+        var mod_cfg = if (config) |c| c.toModuleConfig() else types.WasmModule.Config{};
+        mod_cfg.wasi = true;
+        mod_cfg.wasi_options = opts;
 
-        self.module = try WasmModule.loadWasiWithOptions(allocator, wasm_bytes, opts);
+        self.module = try WasmModule.loadWithOptions(allocator, wasm_bytes, mod_cfg);
         return self;
     }
 
     fn createWithImports(wasm_bytes: []const u8, imports: []const types.ImportEntry) !*CApiModule {
         const self = try std.heap.page_allocator.create(CApiModule);
         errdefer std.heap.page_allocator.destroy(self);
-        self.module = try WasmModule.loadWithImports(default_allocator, wasm_bytes, imports);
+        self.module = try WasmModule.loadWithOptions(default_allocator, wasm_bytes, .{ .imports = imports });
         return self;
     }
 
@@ -281,6 +298,22 @@ export fn zwasm_config_set_allocator(
     config.c_alloc = wrapper;
 }
 
+export fn zwasm_config_set_fuel(config: *zwasm_config_t, fuel: u64) void {
+    config.fuel = fuel;
+}
+
+export fn zwasm_config_set_timeout(config: *zwasm_config_t, timeout_ms: u64) void {
+    config.timeout_ms = timeout_ms;
+}
+
+export fn zwasm_config_set_max_memory(config: *zwasm_config_t, max_memory_bytes: u64) void {
+    config.max_memory_bytes = max_memory_bytes;
+}
+
+export fn zwasm_config_set_force_interpreter(config: *zwasm_config_t, force_interpreter: bool) void {
+    config.force_interpreter = force_interpreter;
+}
+
 // ============================================================
 // Module lifecycle
 // ============================================================
@@ -309,8 +342,7 @@ export fn zwasm_module_new_wasi(wasm_ptr: [*]const u8, len: usize) ?*zwasm_modul
 /// Pass null for config to use default allocator (same as zwasm_module_new).
 export fn zwasm_module_new_configured(wasm_ptr: [*]const u8, len: usize, config: ?*zwasm_config_t) ?*zwasm_module_t {
     clearError();
-    const custom_alloc = if (config) |c| c.getAllocator() else null;
-    return CApiModule.createWithAllocator(wasm_ptr[0..len], false, custom_alloc) catch |err| {
+    return CApiModule.createConfigured(wasm_ptr[0..len], false, config) catch |err| {
         setError(err);
         return null;
     };
@@ -395,8 +427,7 @@ export fn zwasm_module_new_wasi_configured2(
         .stdio_ownership = stdio_ownership2,
     };
 
-    const custom_alloc = if (config) |c| c.getAllocator() else null;
-    return CApiModule.createWasiConfiguredWithAllocator(wasm_ptr[0..len], opts, custom_alloc) catch |err| {
+    return CApiModule.createWasiConfiguredEx(wasm_ptr[0..len], opts, config) catch |err| {
         setError(err);
         return null;
     };
@@ -1171,4 +1202,24 @@ test "c_api: module_new_wasi_configured2 with null config" {
     const module = zwasm_module_new_wasi_configured2(MINIMAL_WASM.ptr, MINIMAL_WASM.len, wasi_config, null);
     try testing.expect(module != null);
     zwasm_module_delete(module.?);
+}
+
+test "c_api: config set vm limits" {
+    const config = zwasm_config_new().?;
+    defer zwasm_config_delete(config);
+
+    zwasm_config_set_fuel(config, 9999);
+    zwasm_config_set_timeout(config, 1000);
+    zwasm_config_set_max_memory(config, 65536);
+    zwasm_config_set_force_interpreter(config, true);
+
+    const module = zwasm_module_new_configured(MINIMAL_WASM.ptr, MINIMAL_WASM.len, config);
+    try testing.expect(module != null);
+    defer zwasm_module_delete(module.?);
+
+    const mod = &module.?.module.*;
+    try testing.expectEqual(@as(?u64, 9999), mod.vm.fuel);
+    try testing.expectEqual(@as(?u64, 65536), mod.vm.max_memory_bytes);
+    try testing.expectEqual(true, mod.vm.force_interpreter);
+    try testing.expect(mod.vm.deadline_ns != null);
 }

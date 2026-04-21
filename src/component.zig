@@ -1144,7 +1144,7 @@ pub const ComponentInstance = struct {
     pub fn instantiate(self: *ComponentInstance) !void {
         // Phase 1: Load embedded core modules
         for (self.comp.core_modules.items) |mod_bytes| {
-            const m = try types.WasmModule.load(self.alloc, mod_bytes);
+            const m = try types.WasmModule.loadWithOptions(self.alloc, mod_bytes, .{});
             self.core_modules.append(self.alloc, m) catch return error.OutOfMemory;
         }
 
@@ -1164,9 +1164,9 @@ pub const ComponentInstance = struct {
         // Phase 1: Load embedded core modules with imports
         for (self.comp.core_modules.items) |mod_bytes| {
             const m = if (imports.len > 0)
-                try types.WasmModule.loadWithImports(self.alloc, mod_bytes, imports)
+                try types.WasmModule.loadWithOptions(self.alloc, mod_bytes, .{ .imports = imports })
             else
-                try types.WasmModule.load(self.alloc, mod_bytes);
+                try types.WasmModule.loadWithOptions(self.alloc, mod_bytes, .{});
             self.core_modules.append(self.alloc, m) catch return error.OutOfMemory;
         }
 

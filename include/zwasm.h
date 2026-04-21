@@ -93,6 +93,26 @@ void zwasm_config_set_allocator(zwasm_config_t *config,
                                 zwasm_alloc_fn_t alloc_fn,
                                 zwasm_free_fn_t free_fn, void *ctx);
 
+/**
+ * Set the instruction fuel limit. Traps when exhausted.
+ */
+void zwasm_config_set_fuel(zwasm_config_t *config, uint64_t fuel);
+
+/**
+ * Set the execution timeout in milliseconds.
+ */
+void zwasm_config_set_timeout(zwasm_config_t *config, uint64_t timeout_ms);
+
+/**
+ * Set the memory ceiling in bytes (limits memory.grow).
+ */
+void zwasm_config_set_max_memory(zwasm_config_t *config, uint64_t max_memory_bytes);
+
+/**
+ * Force the use of the interpreter only (bypass RegIR and JIT).
+ */
+void zwasm_config_set_force_interpreter(zwasm_config_t *config, bool force_interpreter);
+
 /* ================================================================
  * Module lifecycle
  * ================================================================ */

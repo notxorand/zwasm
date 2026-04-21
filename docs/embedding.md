@@ -208,7 +208,7 @@ Key function groups:
 
 | Group | Functions |
 |-------|-----------|
-| Config | `zwasm_config_new`, `zwasm_config_delete`, `zwasm_config_set_allocator` |
+| Config | `zwasm_config_new`, `zwasm_config_delete`, `zwasm_config_set_allocator`, `zwasm_config_set_fuel`, `..._set_timeout`, `..._set_max_memory`, `..._set_force_interpreter` |
 | Module | `zwasm_module_new`, `zwasm_module_new_configured`, `zwasm_module_delete` |
 | WASI | `zwasm_module_new_wasi`, `zwasm_module_new_wasi_configured2` |
 | Invoke | `zwasm_module_invoke`, `zwasm_module_invoke_start` |

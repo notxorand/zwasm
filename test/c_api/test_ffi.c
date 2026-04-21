@@ -89,6 +89,10 @@ typedef const char *(*fn_last_error)(void);
 /* Config */
 typedef zwasm_config_t (*fn_config_new)(void);
 typedef void (*fn_config_delete)(zwasm_config_t);
+typedef void (*fn_config_set_fuel)(zwasm_config_t, uint64_t);
+typedef void (*fn_config_set_timeout)(zwasm_config_t, uint64_t);
+typedef void (*fn_config_set_max_memory)(zwasm_config_t, uint64_t);
+typedef void (*fn_config_set_force_interpreter)(zwasm_config_t, bool);
 
 /* Imports */
 typedef zwasm_imports_t (*fn_import_new)(void);
@@ -128,6 +132,10 @@ static struct {
     fn_last_error             last_error;
     fn_config_new             config_new;
     fn_config_delete          config_delete;
+    fn_config_set_fuel        config_set_fuel;
+    fn_config_set_timeout     config_set_timeout;
+    fn_config_set_max_memory  config_set_max_memory;
+    fn_config_set_force_interpreter config_set_force_interpreter;
     fn_import_new             import_new;
     fn_import_delete          import_delete;
     fn_import_add_fn          import_add_fn;
@@ -173,6 +181,10 @@ static bool load_api(const char *path) {
     LOAD_SYM(last_error,             "zwasm_last_error_message");
     LOAD_SYM(config_new,             "zwasm_config_new");
     LOAD_SYM(config_delete,          "zwasm_config_delete");
+    LOAD_SYM(config_set_fuel,        "zwasm_config_set_fuel");
+    LOAD_SYM(config_set_timeout,     "zwasm_config_set_timeout");
+    LOAD_SYM(config_set_max_memory,  "zwasm_config_set_max_memory");
+    LOAD_SYM(config_set_force_interpreter, "zwasm_config_set_force_interpreter");
     LOAD_SYM(import_new,             "zwasm_import_new");
     LOAD_SYM(import_delete,          "zwasm_import_delete");
     LOAD_SYM(import_add_fn,          "zwasm_import_add_fn");
@@ -450,6 +462,15 @@ static void test_config_lifecycle(void) {
 
     zwasm_config_t cfg = api.config_new();
     ASSERT(cfg != NULL, "config_new");
+    api.config_set_fuel(cfg, 10000);
+    api.config_set_timeout(cfg, 5000);
+    api.config_set_max_memory(cfg, 65536);
+    api.config_set_force_interpreter(cfg, true);
+
+    zwasm_module_t mod2 = api.module_new_configured(RETURN42_WASM, sizeof(RETURN42_WASM), cfg);
+    ASSERT(mod2 != NULL, "module_new_configured(cfg)");
+    if (mod2) api.module_delete(mod2);
+
     if (cfg) api.config_delete(cfg);
 
     /* Configured module (NULL config = default) */
