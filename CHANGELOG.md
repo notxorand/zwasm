@@ -5,6 +5,26 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-04-21
+
+### Added
+- `WasmModule.Config` — unified configuration struct for module loading (PR #30 by @jtakakura)
+- `WasmModule.loadWithOptions(allocator, wasm_bytes, config)` — new primary entry point that consolidates all load variants
+- C API configuration setters: `zwasm_config_set_fuel`, `zwasm_config_set_timeout`, `zwasm_config_set_max_memory`, `zwasm_config_set_force_interpreter`
+
+### Changed
+- Resource limits (fuel, timeout, max_memory_bytes, force_interpreter) now apply during the start function. Previously the CLI applied them post-load, leaving the start function unconstrained.
+- Fuel budget is now decremented across successive `invoke()` calls, matching the pre-existing `/// Persistent fuel budget` doc comment. Previously each invoke reset fuel to the originally-configured value.
+- CLI `--link` fallback retry is now scoped to `error.ImportNotFound`. Previously any error on the imports-enabled load attempt triggered a retry without imports.
+- `loadWithImports` / `loadWasiWithImports` accept `?[]const ImportEntry` (source-compatible with existing `[]const ImportEntry` callers via Zig optional coercion).
+
+### Fixed
+- `loadLinked`: `store.deinit()` is now called on decode/instantiate failure paths (resource leak fix).
+- `loadCore`: `errdefer allocator.destroy(self.vm)` protects against VM leak on post-allocation failures.
+
+### Notes
+- All existing `load*` helpers (`load`, `loadWithFuel`, `loadFromWat`, `loadWasi`, `loadWasiWithOptions`, `loadWithImports`, `loadWasiWithImports`) are retained as thin wrappers over `loadWithOptions`, so embedders do not need to update call sites.
+
 ## [1.7.2] - 2026-04-21
 
 ### Fixed
