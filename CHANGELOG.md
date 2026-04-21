@@ -5,6 +5,18 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.7.2] - 2026-04-21
+
+### Fixed
+- ARM64 JIT: `i32.rem_s/u` and `i64.rem_s/u` produced wrong remainders when
+  the destination register aliased the divisor (`rd == rs2`). UDIV/SDIV
+  clobbered the divisor before MSUB could read it, so MSUB computed
+  `dividend - quotient * quotient` instead of `dividend - quotient * divisor`.
+  Triggered by TinyGo-compiled `gcd` (IR: `r3 = r0 % r3`), causing infinite
+  loops after JIT compilation (HOT_THRESHOLD). The prior fix in v1.7.1
+  only covered `rd == rs1`. This commit preserves whichever operand `rd`
+  aliases before the divide.
+
 ## [1.7.1] - 2026-04-21
 
 ### Added

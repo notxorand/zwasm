@@ -3683,20 +3683,35 @@ pub const Compiler = struct {
         // Check divisor == 0 → DivisionByZero
         self.emit(a64.cmpImm32(rs2, 0));
         self.emitCondError(.eq, 3);
-        // Save rs1 before division when d aliases rs1 — div clobbers d,
-        // and msub needs the original dividend as Xa operand.
-        const dividend = if (d == rs1) blk: {
-            self.emit(a64.mov64(SCRATCH, rs1));
-            self.scratch_vreg = null;
-            break :blk SCRATCH;
-        } else rs1;
-        // rem = rs1 - (rs1/rs2)*rs2  via SDIV + MSUB
+        // UDIV/SDIV writes d. If d aliases rs1 or rs2, MSUB would read
+        // the quotient back from that register instead of the original
+        // dividend / divisor. Preserve whichever operand d aliases.
+        // (vreg mapping never lands on SCRATCH/SCRATCH2, so d can be
+        // SCRATCH only when rd is spilled, and never SCRATCH2.)
+        var dividend = rs1;
+        var divisor = rs2;
+        if (d == rs1) {
+            const save_reg: u5 = if (rs1 == SCRATCH) blk: {
+                if (rs2 == SCRATCH2) @panic("JIT rem32: full-spill aliasing unsupported");
+                break :blk SCRATCH2;
+            } else SCRATCH;
+            self.emit(a64.mov64(save_reg, rs1));
+            if (save_reg == SCRATCH) self.scratch_vreg = null;
+            dividend = save_reg;
+        }
+        if (d == rs2) {
+            // rs2 == SCRATCH2 would require d == SCRATCH2, but destRegEff
+            // never returns SCRATCH2; so rs2 is mapped and SCRATCH2 is free.
+            self.emit(a64.mov64(SCRATCH2, rs2));
+            divisor = SCRATCH2;
+        }
+        // rem = dividend - (rs1/rs2)*divisor  via [S|U]DIV + MSUB
         if (sign == .signed) {
             self.emit(a64.sdiv32(d, rs1, rs2));
         } else {
             self.emit(a64.udiv32(d, rs1, rs2));
         }
-        self.emit(a64.msub32(d, d, rs2, dividend));
+        self.emit(a64.msub32(d, d, divisor, dividend));
         self.storeVreg(instr.rd, d);
     }
 
@@ -3765,19 +3780,32 @@ pub const Compiler = struct {
         const d = self.destRegEff(instr.rd);
         self.emit(a64.cmpImm64(rs2, 0));
         self.emitCondError(.eq, 3);
-        // Save rs1 before division when d aliases rs1 — udiv clobbers d,
-        // and msub needs the original dividend as Xa operand.
-        const dividend = if (d == rs1) blk: {
-            self.emit(a64.mov64(SCRATCH, rs1));
-            self.scratch_vreg = null;
-            break :blk SCRATCH;
-        } else rs1;
+        // UDIV/SDIV writes d. If d aliases rs1 or rs2, MSUB would read
+        // the quotient back from that register instead of the original
+        // dividend / divisor. Preserve whichever operand d aliases.
+        // (vreg mapping never lands on SCRATCH/SCRATCH2, so d can be
+        // SCRATCH only when rd is spilled, and never SCRATCH2.)
+        var dividend = rs1;
+        var divisor = rs2;
+        if (d == rs1) {
+            const save_reg: u5 = if (rs1 == SCRATCH) blk: {
+                if (rs2 == SCRATCH2) @panic("JIT rem64: full-spill aliasing unsupported");
+                break :blk SCRATCH2;
+            } else SCRATCH;
+            self.emit(a64.mov64(save_reg, rs1));
+            if (save_reg == SCRATCH) self.scratch_vreg = null;
+            dividend = save_reg;
+        }
+        if (d == rs2) {
+            self.emit(a64.mov64(SCRATCH2, rs2));
+            divisor = SCRATCH2;
+        }
         if (sign == .signed) {
             self.emit(a64.sdiv64(d, rs1, rs2));
         } else {
             self.emit(a64.udiv64(d, rs1, rs2));
         }
-        self.emit(a64.msub64(d, d, rs2, dividend));
+        self.emit(a64.msub64(d, d, divisor, dividend));
         self.storeVreg(instr.rd, d);
     }
 
@@ -8190,6 +8218,88 @@ test "remainder with rd == rs1 (aliasing)" {
         const result = jit64.entry(&regs, undefined, undefined);
         try testing.expectEqual(@as(u64, 0), result);
         try testing.expectEqual(@as(u64, 2), regs[0]);
+    }
+}
+
+test "remainder with rd == rs2 (aliasing)" {
+    // Regression: TinyGo-compiled `gcd` emits `r3 = r0 % r3` where the
+    // destination aliases the divisor. The rem helper on ARM64 used to
+    // save only rs1 into a scratch, leaving rs2 to be clobbered by SDIV
+    // so MSUB read back the quotient as divisor → wrong remainder →
+    // infinite loop in gcd(100, 75) (seen via ClojureWasm on zwasm v1.7.x).
+    if (builtin.cpu.arch != .aarch64) return;
+
+    const alloc = testing.allocator;
+    // rem_u r1, r0, r1 — rd aliases rs2
+    var code = [_]RegInstr{
+        .{ .op = 0x70, .rd = 1, .rs1 = 0, .rs2_field = 1 }, // i32.rem_u r1, r0, r1
+        .{ .op = regalloc_mod.OP_RETURN, .rd = 1, .rs1 = 0, .operand = 0 },
+    };
+    var reg_func = RegFunc{
+        .code = &code,
+        .pool64 = &.{},
+        .reg_count = 2,
+        .local_count = 2,
+        .alloc = alloc,
+    };
+    const jit_code = compileFunction(alloc, &reg_func, &.{}, 0, 0, 1, null, 0, false, null, 16) orelse
+        return error.CompilationFailed;
+    defer jit_code.deinit(alloc);
+    {
+        var regs: [6]u64 = .{ 100, 75, 0, 0, 0, 0 };
+        const result = jit_code.entry(&regs, undefined, undefined);
+        try testing.expectEqual(@as(u64, 0), result);
+        try testing.expectEqual(@as(u64, 25), regs[0]); // 100 % 75 = 25
+    }
+    {
+        var regs: [6]u64 = .{ 18, 12, 0, 0, 0, 0 };
+        const result = jit_code.entry(&regs, undefined, undefined);
+        try testing.expectEqual(@as(u64, 0), result);
+        try testing.expectEqual(@as(u64, 6), regs[0]); // 18 % 12 = 6
+    }
+
+    // i64.rem_u with rd == rs2
+    var code64 = [_]RegInstr{
+        .{ .op = 0x82, .rd = 1, .rs1 = 0, .rs2_field = 1 }, // i64.rem_u r1, r0, r1
+        .{ .op = regalloc_mod.OP_RETURN, .rd = 1, .rs1 = 0, .operand = 0 },
+    };
+    var reg_func64 = RegFunc{
+        .code = &code64,
+        .pool64 = &.{},
+        .reg_count = 2,
+        .local_count = 2,
+        .alloc = alloc,
+    };
+    const jit64 = compileFunction(alloc, &reg_func64, &.{}, 0, 0, 1, null, 0, false, null, 16) orelse
+        return error.CompilationFailed;
+    defer jit64.deinit(alloc);
+    {
+        var regs: [6]u64 = .{ 111111111011, 10000000000, 0, 0, 0, 0 };
+        const result = jit64.entry(&regs, undefined, undefined);
+        try testing.expectEqual(@as(u64, 0), result);
+        try testing.expectEqual(@as(u64, 1111111011), regs[0]); // 111111111011 % 10000000000
+    }
+
+    // i32.rem_s with rd == rs2 (mirrors TinyGo gcd more closely)
+    var codes = [_]RegInstr{
+        .{ .op = 0x6F, .rd = 1, .rs1 = 0, .rs2_field = 1 }, // i32.rem_s r1, r0, r1
+        .{ .op = regalloc_mod.OP_RETURN, .rd = 1, .rs1 = 0, .operand = 0 },
+    };
+    var reg_funcs = RegFunc{
+        .code = &codes,
+        .pool64 = &.{},
+        .reg_count = 2,
+        .local_count = 2,
+        .alloc = alloc,
+    };
+    const jits = compileFunction(alloc, &reg_funcs, &.{}, 0, 0, 1, null, 0, false, null, 16) orelse
+        return error.CompilationFailed;
+    defer jits.deinit(alloc);
+    {
+        var regs: [6]u64 = .{ 100, 75, 0, 0, 0, 0 };
+        const result = jits.entry(&regs, undefined, undefined);
+        try testing.expectEqual(@as(u64, 0), result);
+        try testing.expectEqual(@as(u64, 25), regs[0]); // 100 % 75 = 25
     }
 }
 
