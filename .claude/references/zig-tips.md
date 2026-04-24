@@ -126,3 +126,76 @@ try w.print("{f}", .{my_value});
 // OK — skips format method, uses default
 try w.print("{any}", .{my_value});
 ```
+
+## 0.16.0 migration gotchas (lessons from v1.10.0)
+
+These bit us during the Zig 0.15.2 → 0.16.0 migration. Each one cost hours.
+
+### `std.posix.timespec` is `void` on Windows
+
+```zig
+// Compiles on Mac/Linux, fails on Windows with
+//   error: expected type 'void', found 'comptime_int'
+const req: std.posix.timespec = .{ .sec = 0, .nsec = ns };
+```
+
+Branch on `builtin.os.tag` at comptime and use `kernel32.Sleep(ms)` on
+Windows. The POSIX path must be inside the `else` branch — putting it
+at top level still tries to semantically analyze the struct literal on
+Windows.
+
+### `windows.FALSE` → `windows.BOOL.FALSE`
+
+0.16 made `windows.BOOL` a proper enum. Bare `windows.FALSE` / `windows.TRUE`
+no longer exist — use `windows.BOOL.FALSE` / `.TRUE`.
+
+### `std.c.fd_t == windows.HANDLE` breaks `std.c.write` on Windows
+
+On Windows with `link_libc = true`:
+
+```zig
+pub const fd_t = switch (native_os) {
+    .windows => windows.HANDLE,   // *anyopaque (8 bytes)
+    // ...
+};
+pub extern "c" fn write(fd: fd_t, ...) isize;
+```
+
+MSVCRT's `_write` actually takes `int fd` (4 bytes). Calling
+`std.c.write(handle, ...)` passes a pointer where an int is expected and
+lands on a meaningless fd. All `std.c.{read,write,pread,pwrite,lseek}`
+calls are broken on Windows — use `WriteFile`/`ReadFile`/`SetFilePointerEx`
+directly, or migrate to `std.Io.File` methods.
+
+### `std.c.Stat` / `std.c.fstat` are empty on Linux
+
+The libc Stat binding is intentionally empty on Linux in 0.16. Use the
+statx syscall directly (`std.posix.system.statx`) or `lseek(SEEK_END)` for
+just-the-size. The empty-struct compile error is the first hint.
+
+### `@Vector` rejected as runtime index target
+
+0.16 tightened SIMD operand checks. Writing `vec[i]` with a runtime `i`
+no longer compiles — cast to `[N]T` first via `@bitCast`, then index,
+then cast back.
+
+### `std.Io.Reader.takeLeb128` ≠ WASM LEB128
+
+The 0.16 stdlib LEB128 reader does NOT enforce the "integer too large"
+error that the WASM spec requires (10 bytes max for 64-bit LEB128).
+Keep the in-repo 0.15-style inline port for spec-conformant decoding.
+
+### Long-lived `std.Io.Threaded.io()` segfaults in `Io.Timestamp.now`
+
+Creating a fresh `std.Io.Threaded` inside a long-running `main()` and
+handing out its `.io()` segfaults after many iterations (observed in
+`e2e_runner.main` iterating test files). Fix: thread `init.io` from
+`std.process.Init` instead. Short-scope per-test-body locals are OK.
+
+### `nix develop --command` re-sets `SDKROOT` inside direnv shells
+
+On macOS with the project's direnv + claude-direnv setup, the flake is
+already active and `DEVELOPER_DIR`/`SDKROOT` are deliberately unset.
+Wrapping a command in `nix develop --command` re-enters the shell, which
+resets `SDKROOT`, which makes `/usr/bin/git` (the Apple xcrun stub) fail
+with "tool 'git' not found". Just call tools directly.
