@@ -61,7 +61,7 @@ const FieldArena = struct {
     cursor: usize, // next free position in current page
 
     fn init(a: Allocator) FieldArena {
-        return .{ .pages = .{}, .alloc = a, .cursor = ARENA_PAGE_SLOTS };
+        return .{ .pages = .empty, .alloc = a, .cursor = ARENA_PAGE_SLOTS };
     }
 
     fn deinit(self: *FieldArena) void {
