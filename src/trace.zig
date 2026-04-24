@@ -68,7 +68,7 @@ fn stderrPrint(comptime fmt: []const u8, args: anytype) void {
         std.os.windows.peb().ProcessParameters.hStdError
     else
         std.posix.STDERR_FILENO;
-    _ = std.c.write(stderr_fd, msg.ptr, msg.len);
+    _ = platform.pfdWrite(stderr_fd, msg);
 }
 
 pub fn traceJitCompile(tc: *const TraceConfig, func_idx: u32, ir_count: u32, code_size: u32) void {

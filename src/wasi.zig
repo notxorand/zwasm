@@ -157,11 +157,7 @@ const HostHandle = struct {
     }
 
     fn close(self: HostHandle) void {
-        if (builtin.os.tag == .windows) {
-            _ = windows.CloseHandle(self.raw);
-        } else {
-            _ = std.c.close(self.raw);
-        }
+        platform.pfdClose(self.raw);
     }
 
     fn stat(self: HostHandle, io: std.Io) !std.Io.File.Stat {
@@ -186,7 +182,7 @@ const HostHandle = struct {
             }
             break :blk dup_handle;
         } else blk: {
-            const rc = std.c.dup(self.raw);
+            const rc = platform.pfdDup(self.raw);
             if (rc < 0) return error.Unexpected;
             break :blk rc;
         };
@@ -288,11 +284,7 @@ pub const WasiContext = struct {
     }
 
     fn closeHandle(handle: std.Io.File.Handle) void {
-        if (builtin.os.tag == .windows) {
-            _ = windows.CloseHandle(handle);
-        } else {
-            _ = std.c.close(handle);
-        }
+        platform.pfdClose(handle);
     }
 
     pub fn deinit(self: *WasiContext) void {
@@ -520,9 +512,13 @@ pub fn fdSize(fd: posix.fd_t) ?u64 {
     return @intCast(end);
 }
 
-/// Read libc errno and map to a WASI Errno.
+/// Map the most recent platform errno (set by `platform.pfd*` helpers or
+/// by explicit `platform.syncErrnoFromLibC()` calls after a raw `std.c.*`
+/// invocation) to a WASI `Errno`. Replaces the pre-W46 variant that read
+/// `std.c._errno().*` directly — keeping it libc-free is what lets Linux
+/// builds drop `link_libc = true`.
 fn cErrnoToWasi() Errno {
-    const e: std.posix.E = @enumFromInt(std.c._errno().*);
+    const e = platform.pfdErrno();
     return switch (e) {
         .ACCES => .ACCES,
         .AGAIN => .AGAIN,
@@ -1568,7 +1564,21 @@ pub fn fd_datasync(ctx: *anyopaque, _: usize) anyerror!void {
                 return;
             }
         } else {
-            if (std.c.fdatasync(host_fd) != 0) {
+            const failed = switch (comptime builtin.os.tag) {
+                .linux => blk: {
+                    const rc = std.os.linux.fdatasync(host_fd);
+                    const e = std.os.linux.errno(rc);
+                    if (e != .SUCCESS) platform.pfd_last_errno = e;
+                    break :blk e != .SUCCESS;
+                },
+                .windows => unreachable,
+                else => blk: {
+                    const rc = std.c.fdatasync(host_fd);
+                    if (rc != 0) platform.syncErrnoFromLibC();
+                    break :blk rc != 0;
+                },
+            };
+            if (failed) {
                 try pushErrno(vm, cErrnoToWasi());
                 return;
             }
@@ -1597,16 +1607,9 @@ pub fn fd_sync(ctx: *anyopaque, _: usize) anyerror!void {
     };
 
     if (wasi.getHostFd(fd)) |host_fd| {
-        if (builtin.os.tag == .windows) {
-            if (platform.FlushFileBuffers(host_fd) == windows.BOOL.FALSE) {
-                try pushErrno(vm, .IO);
-                return;
-            }
-        } else {
-            if (std.c.fsync(host_fd) != 0) {
-                try pushErrno(vm, cErrnoToWasi());
-                return;
-            }
+        if (platform.pfdFsync(host_fd) != 0) {
+            try pushErrno(vm, cErrnoToWasi());
+            return;
         }
         try pushErrno(vm, .SUCCESS);
     } else {
@@ -1946,19 +1949,21 @@ pub fn fd_fdstat_set_flags(ctx: *anyopaque, _: usize) anyerror!void {
     if (fdflags & 0x04 != 0) os_flags |= @as(u32, @bitCast(posix.O{ .NONBLOCK = true }));
     if (fdflags & 0x10 != 0) os_flags |= @as(u32, @bitCast(posix.O{ .SYNC = true }));
 
-    if (comptime builtin.os.tag == .linux) {
-        const linux = std.os.linux;
-        const rc = linux.fcntl(host_fd, linux.F.SETFL, @as(usize, os_flags));
-        if (posix.errno(rc) != .SUCCESS) {
-            try pushErrno(vm, .IO);
-            return;
-        }
-    } else {
-        const rc = std.c.fcntl(host_fd, std.c.F.SETFL, os_flags);
-        if (rc < 0) {
-            try pushErrno(vm, .IO);
-            return;
-        }
+    const failed = switch (comptime builtin.os.tag) {
+        .linux => blk: {
+            const linux = std.os.linux;
+            const rc = linux.fcntl(host_fd, linux.F.SETFL, @as(usize, os_flags));
+            break :blk posix.errno(rc) != .SUCCESS;
+        },
+        .windows => false, // fcntl not meaningful on Windows; treat as success
+        else => blk: {
+            const rc = std.c.fcntl(host_fd, std.c.F.SETFL, os_flags);
+            break :blk rc < 0;
+        },
+    };
+    if (failed) {
+        try pushErrno(vm, .IO);
+        return;
     }
     try pushErrno(vm, .SUCCESS);
 }
@@ -1999,7 +2004,21 @@ pub fn fd_filestat_set_size(ctx: *anyopaque, _: usize) anyerror!void {
     };
 
     if (wasi.getHostFd(fd)) |host_fd| {
-        if (std.c.ftruncate(host_fd, @bitCast(size)) != 0) {
+        const failed = switch (comptime builtin.os.tag) {
+            .linux => blk: {
+                const rc = std.os.linux.ftruncate(host_fd, @bitCast(size));
+                const e = std.os.linux.errno(rc);
+                if (e != .SUCCESS) platform.pfd_last_errno = e;
+                break :blk e != .SUCCESS;
+            },
+            .windows => unreachable,
+            else => blk: {
+                const rc = std.c.ftruncate(host_fd, @bitCast(size));
+                if (rc != 0) platform.syncErrnoFromLibC();
+                break :blk rc != 0;
+            },
+        };
+        if (failed) {
             try pushErrno(vm, cErrnoToWasi());
             return;
         }
@@ -2058,10 +2077,14 @@ pub fn fd_filestat_set_times(ctx: *anyopaque, _: usize) anyerror!void {
             // utimensat(fd, NULL, times, 0) == futimens(fd, times)
             const rc = std.os.linux.utimensat(host_fd, null, &times, 0);
             const e = std.os.linux.errno(rc);
-            if (e != .SUCCESS) std.c._errno().* = @intFromEnum(e);
+            if (e != .SUCCESS) platform.pfd_last_errno = e;
             break :blk e != .SUCCESS;
         },
-        else => std.c.futimens(host_fd, &times) != 0,
+        else => blk: {
+            const rc = std.c.futimens(host_fd, &times);
+            if (rc != 0) platform.syncErrnoFromLibC();
+            break :blk rc != 0;
+        },
     };
     if (failed) {
         try pushErrno(vm, cErrnoToWasi());
@@ -2550,7 +2573,21 @@ pub fn path_symlink(ctx: *anyopaque, _: usize) anyerror!void {
             try pushErrno(vm, .NAMETOOLONG);
             return;
         };
-        if (std.c.symlinkat(old_z.ptr, host_fd, new_z.ptr) != 0) {
+        const failed = switch (comptime builtin.os.tag) {
+            .linux => blk: {
+                const rc = std.os.linux.symlinkat(old_z.ptr, host_fd, new_z.ptr);
+                const e = std.os.linux.errno(rc);
+                if (e != .SUCCESS) platform.pfd_last_errno = e;
+                break :blk e != .SUCCESS;
+            },
+            .windows => unreachable,
+            else => blk: {
+                const rc = std.c.symlinkat(old_z.ptr, host_fd, new_z.ptr);
+                if (rc != 0) platform.syncErrnoFromLibC();
+                break :blk rc != 0;
+            },
+        };
+        if (failed) {
             try pushErrno(vm, cErrnoToWasi());
             return;
         }
@@ -2606,7 +2643,21 @@ pub fn path_link(ctx: *anyopaque, _: usize) anyerror!void {
             try pushErrno(vm, .NAMETOOLONG);
             return;
         };
-        if (std.c.linkat(old_host_fd, old_z.ptr, new_host_fd, new_z.ptr, 0) != 0) {
+        const failed = switch (comptime builtin.os.tag) {
+            .linux => blk: {
+                const rc = std.os.linux.linkat(old_host_fd, old_z.ptr, new_host_fd, new_z.ptr, 0);
+                const e = std.os.linux.errno(rc);
+                if (e != .SUCCESS) platform.pfd_last_errno = e;
+                break :blk e != .SUCCESS;
+            },
+            .windows => unreachable,
+            else => blk: {
+                const rc = std.c.linkat(old_host_fd, old_z.ptr, new_host_fd, new_z.ptr, 0);
+                if (rc != 0) platform.syncErrnoFromLibC();
+                break :blk rc != 0;
+            },
+        };
+        if (failed) {
             try pushErrno(vm, cErrnoToWasi());
             return;
         }
@@ -2866,16 +2917,16 @@ test "WASI — fd_write via 07_wasi_hello.wasm" {
 
     // Create pipe for capturing stdout
     var pipe_fds: [2]posix.fd_t = undefined;
-    if (std.c.pipe(&pipe_fds) != 0) return error.SkipZigTest;
+    if (platform.pfdPipe(&pipe_fds) != 0) return error.SkipZigTest;
     const pipe = pipe_fds;
-    defer _ = std.c.close(pipe[0]);
+    defer platform.pfdClose(pipe[0]);
 
     // Redirect stdout to pipe write end
-    const saved_stdout = std.c.dup(@as(posix.fd_t, 1));
+    const saved_stdout = platform.pfdDup(@as(posix.fd_t, 1));
     if (saved_stdout < 0) return error.SkipZigTest;
-    defer _ = std.c.close(saved_stdout);
-    if (std.c.dup2(pipe[1], @as(posix.fd_t, 1)) < 0) return error.SkipZigTest;
-    _ = std.c.close(pipe[1]);
+    defer platform.pfdClose(saved_stdout);
+    if (platform.pfdDup2(pipe[1], @as(posix.fd_t, 1)) < 0) return error.SkipZigTest;
+    platform.pfdClose(pipe[1]);
 
     // Run _start
     var vm_inst = Vm.init(alloc);
@@ -2886,11 +2937,11 @@ test "WASI — fd_write via 07_wasi_hello.wasm" {
     };
 
     // Restore stdout
-    _ = std.c.dup2(saved_stdout, @as(posix.fd_t, 1));
+    _ = platform.pfdDup2(saved_stdout, @as(posix.fd_t, 1));
 
     // Read captured output
     var buf: [256]u8 = undefined;
-    const n_rc = std.c.read(pipe[0], &buf, buf.len);
+    const n_rc = platform.pfdRead(pipe[0], buf[0..]);
     if (n_rc < 0) return error.SkipZigTest;
     const output = buf[0..@intCast(n_rc)];
 
@@ -3427,9 +3478,9 @@ test "stdio override: custom fd replaces default" {
 
     // Create a pipe to use as custom stdout
     var pipe_fds: [2]std.posix.fd_t = undefined;
-    if (std.c.pipe(&pipe_fds) != 0) return error.SkipZigTest;
+    if (platform.pfdPipe(&pipe_fds) != 0) return error.SkipZigTest;
     const pipe = pipe_fds;
-    defer _ = std.c.close(pipe[0]);
+    defer platform.pfdClose(pipe[0]);
 
     // Set stdout (fd 1) to write end of pipe, with ownership (runtime closes it)
     ctx.setStdioFd(1, pipe[1], .own);
@@ -3448,10 +3499,10 @@ test "stdio override: borrow mode does not close fd on deinit" {
     const alloc = testing.allocator;
 
     var pipe_fds: [2]std.posix.fd_t = undefined;
-    if (std.c.pipe(&pipe_fds) != 0) return error.SkipZigTest;
+    if (platform.pfdPipe(&pipe_fds) != 0) return error.SkipZigTest;
     const pipe = pipe_fds;
-    defer _ = std.c.close(pipe[0]);
-    defer _ = std.c.close(pipe[1]);
+    defer platform.pfdClose(pipe[0]);
+    defer platform.pfdClose(pipe[1]);
 
     {
         var ctx = WasiContext.init(alloc);
@@ -3461,7 +3512,7 @@ test "stdio override: borrow mode does not close fd on deinit" {
 
     // pipe[1] should still be valid (borrowed, not closed by deinit)
     // Writing to it should succeed
-    const written_rc = std.c.write(pipe[1], "ok", 2);
+    const written_rc = platform.pfdWrite(pipe[1], "ok");
     try testing.expect(written_rc == 2);
 }
 
