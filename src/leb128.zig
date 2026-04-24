@@ -97,29 +97,89 @@ pub const Reader = struct {
     }
 };
 
-/// Internal: adapter that makes Reader work with std.leb functions.
-const ByteReader = struct {
-    reader: *Reader,
-
-    pub fn readByte(self: *ByteReader) Error!u8 {
-        return self.reader.readByte();
-    }
-};
+// Direct LEB128 decoding on our byte-slice Reader. Zig 0.16.0 removed
+// `std.leb.readUleb128` / `readIleb128` in favour of `std.Io.Reader.takeLeb128`,
+// but our Reader is a plain byte-slice cursor (not a `std.Io.Reader`), and
+// wrapping it just to recover `takeLeb128` would cost more than inlining
+// the 15-line decoder. LEB128 is simple enough that spec-fidelity review is
+// straightforward: 7 data bits per byte, continuation flag in bit 7, signed
+// variant sign-extends on the final byte based on bit 6.
 
 fn readUnsigned(comptime T: type, reader: *Reader) Error!T {
-    var br = ByteReader{ .reader = reader };
-    return std.leb.readUleb128(T, &br) catch |err| switch (err) {
-        error.Overflow => return error.Overflow,
-        error.EndOfStream => return error.EndOfStream,
-    };
+    const U = std.meta.Int(.unsigned, @typeInfo(T).int.bits);
+    const max_bits = @typeInfo(T).int.bits;
+    var result: U = 0;
+    var shift: u8 = 0;
+    while (true) {
+        const b = try reader.readByte();
+        const low7: U = @as(U, b & 0x7F);
+
+        // Overflow check: bits beyond T's width must be zero.
+        if (shift >= max_bits) {
+            if (low7 != 0) return error.Overflow;
+        } else if (shift + 7 > max_bits) {
+            const overflow_mask: u8 = @truncate(@as(u16, 0xFF) << @intCast(max_bits - shift));
+            if ((b & 0x7F & overflow_mask) != 0) return error.Overflow;
+            result |= low7 << @intCast(shift);
+        } else {
+            result |= low7 << @intCast(shift);
+        }
+
+        if ((b & 0x80) == 0) return @intCast(result);
+        shift += 7;
+    }
 }
 
 fn readSigned(comptime T: type, reader: *Reader) Error!T {
-    var br = ByteReader{ .reader = reader };
-    return std.leb.readIleb128(T, &br) catch |err| switch (err) {
-        error.Overflow => return error.Overflow,
-        error.EndOfStream => return error.EndOfStream,
-    };
+    const max_bits = @typeInfo(T).int.bits;
+    var result: i64 = 0;
+    var shift: u8 = 0;
+    while (true) {
+        const b = try reader.readByte();
+        const low7: i64 = @as(i64, b & 0x7F);
+
+        if (shift + 7 >= max_bits) {
+            // Last byte: validate that unused high bits match the sign bit.
+            const sign_bit: u8 = 1 << 6;
+            const sign_extended: u8 = if ((b & sign_bit) != 0) 0xFF else 0x00;
+            const used_bits = max_bits - shift;
+            if (used_bits < 7) {
+                const data_mask: u8 = @truncate((@as(u16, 1) << @intCast(used_bits)) - 1);
+                const sign_source = b & 0x7F & ~data_mask;
+                const expected_sign = sign_extended & ~data_mask & 0x7F;
+                if (sign_source != expected_sign) return error.Overflow;
+            }
+            result |= low7 << @intCast(shift);
+            // Sign-extend if negative.
+            if ((b & sign_bit) != 0 and shift + 7 < 64) {
+                result |= @as(i64, -1) << @intCast(shift + 7);
+            }
+            if ((b & 0x80) == 0) {
+                if (T == i64) return result;
+                // Range-check against T.
+                const min_v = @as(i64, std.math.minInt(T));
+                const max_v = @as(i64, std.math.maxInt(T));
+                if (result < min_v or result > max_v) return error.Overflow;
+                return @intCast(result);
+            }
+            // Continuation past the type width — overflow.
+            return error.Overflow;
+        } else {
+            result |= low7 << @intCast(shift);
+            if ((b & 0x80) == 0) {
+                // Sign-extend from bit 6 of the final byte.
+                if ((b & (1 << 6)) != 0 and shift + 7 < 64) {
+                    result |= @as(i64, -1) << @intCast(shift + 7);
+                }
+                if (T == i64) return result;
+                const min_v = @as(i64, std.math.minInt(T));
+                const max_v = @as(i64, std.math.maxInt(T));
+                if (result < min_v or result > max_v) return error.Overflow;
+                return @intCast(result);
+            }
+        }
+        shift += 7;
+    }
 }
 
 // ============================================================
