@@ -20,12 +20,12 @@ pub const MAX_PAGES: u32 = 64 * 1024; // 4 GiB theoretical max
 /// Per-address wait queue for memory.atomic.wait/notify.
 /// Uses a simple list of condition variables keyed by address.
 pub const WaitQueue = struct {
-    mutex: std.Thread.Mutex = .{},
+    mutex: std.Io.Mutex = .init,
     waiters: std.ArrayList(Waiter) = .empty,
 
     const Waiter = struct {
         addr: u64,
-        cond: std.Thread.Condition = .{},
+        cond: std.Io.Condition = .init,
     };
 
     pub fn deinit(self: *WaitQueue, alloc: mem.Allocator) void {
@@ -213,96 +213,121 @@ pub const Memory = struct {
 
     /// memory.atomic.wait32: block until notified or timeout.
     /// Returns 0 (ok/woken), 1 (not-equal), 2 (timed-out).
-    pub fn atomicWait32(self: *Memory, addr: u64, expected: i32, timeout_ns: i64) !i32 {
+    pub fn atomicWait32(self: *Memory, io: std.Io, addr: u64, expected: i32, timeout_ns: i64) !i32 {
         if (!self.is_shared_memory) return error.Trap;
         const loaded = try self.read(i32, 0, addr);
         if (loaded != expected) return 1; // not-equal
 
         const wq = self.ensureWaitQueue();
-        wq.mutex.lock();
+        wq.mutex.lockUncancelable(io);
 
         // Add waiter
         const idx = wq.waiters.items.len;
         wq.waiters.append(self.alloc, .{ .addr = addr }) catch {
-            wq.mutex.unlock();
+            wq.mutex.unlock(io);
             return 2; // treat alloc failure as timeout
         };
         const waiter = &wq.waiters.items[idx];
 
-        if (timeout_ns < 0) {
-            // Wait forever
-            waiter.cond.wait(&wq.mutex);
-        } else {
-            const timeout: u64 = @intCast(timeout_ns);
-            waiter.cond.timedWait(&wq.mutex, timeout) catch {
-                // Timeout — remove self from waiters
-                self.removeWaiter(wq, idx);
-                wq.mutex.unlock();
-                return 2; // timed-out
-            };
-        }
+        const timed_out = condTimedWait(&waiter.cond, io, &wq.mutex, timeout_ns);
 
-        // Woken — remove self from waiters
+        // Woken (or timed out) — remove self from waiters
         self.removeWaiter(wq, idx);
-        wq.mutex.unlock();
-        return 0; // ok
+        wq.mutex.unlock(io);
+        return if (timed_out) 2 else 0;
     }
 
     /// memory.atomic.wait64: block until notified or timeout.
     /// Returns 0 (ok/woken), 1 (not-equal), 2 (timed-out).
-    pub fn atomicWait64(self: *Memory, addr: u64, expected: i64, timeout_ns: i64) !i32 {
+    pub fn atomicWait64(self: *Memory, io: std.Io, addr: u64, expected: i64, timeout_ns: i64) !i32 {
         if (!self.is_shared_memory) return error.Trap;
         const loaded = try self.read(i64, 0, addr);
         if (loaded != expected) return 1; // not-equal
 
         const wq = self.ensureWaitQueue();
-        wq.mutex.lock();
+        wq.mutex.lockUncancelable(io);
 
         const idx = wq.waiters.items.len;
         wq.waiters.append(self.alloc, .{ .addr = addr }) catch {
-            wq.mutex.unlock();
+            wq.mutex.unlock(io);
             return 2;
         };
         const waiter = &wq.waiters.items[idx];
 
-        if (timeout_ns < 0) {
-            waiter.cond.wait(&wq.mutex);
-        } else {
-            const timeout: u64 = @intCast(timeout_ns);
-            waiter.cond.timedWait(&wq.mutex, timeout) catch {
-                self.removeWaiter(wq, idx);
-                wq.mutex.unlock();
-                return 2;
-            };
-        }
+        const timed_out = condTimedWait(&waiter.cond, io, &wq.mutex, timeout_ns);
 
         self.removeWaiter(wq, idx);
-        wq.mutex.unlock();
-        return 0;
+        wq.mutex.unlock(io);
+        return if (timed_out) 2 else 0;
     }
 
     /// memory.atomic.notify: wake up to `count` waiters at `addr`.
     /// Returns the number of waiters woken.
-    pub fn atomicNotify(self: *Memory, addr: u64, count: u32) !i32 {
+    pub fn atomicNotify(self: *Memory, io: std.Io, addr: u64, count: u32) !i32 {
         // Notify is valid on non-shared memory (returns 0 per spec).
         _ = try self.read(u32, 0, addr); // bounds check
         if (count == 0) return 0; // wake 0 threads
         const wq_opt = self.wait_queue;
         if (wq_opt == null) return 0;
         var wq = &self.wait_queue.?;
-        wq.mutex.lock();
-        defer wq.mutex.unlock();
+        wq.mutex.lockUncancelable(io);
+        defer wq.mutex.unlock(io);
 
         var woken: i32 = 0;
         var i: usize = 0;
         while (i < wq.waiters.items.len and woken < @as(i32, @intCast(count))) {
             if (wq.waiters.items[i].addr == addr) {
-                wq.waiters.items[i].cond.signal();
+                wq.waiters.items[i].cond.signal(io);
                 woken += 1;
             }
             i += 1;
         }
         return woken;
+    }
+
+    /// Condition.wait with optional timeout — Zig 0.16.0's `std.Io.Condition`
+    /// dropped `timedWait`, so we roll our own by driving the same epoch
+    /// counter the stdlib uses, via `io.futexWaitTimeout`. Returns true on
+    /// timeout, false on successful wake.
+    fn condTimedWait(cond: *std.Io.Condition, io: std.Io, mutex: *std.Io.Mutex, timeout_ns: i64) bool {
+        if (timeout_ns < 0) {
+            cond.waitUncancelable(io, mutex);
+            return false;
+        }
+        var epoch = cond.epoch.load(.acquire);
+        const prev_state = cond.state.fetchAdd(.{ .waiters = 1, .signals = 0 }, .monotonic);
+        _ = prev_state; // overflow is astronomically unlikely; match stdlib's assert semantics
+        mutex.unlock(io);
+        defer mutex.lockUncancelable(io);
+
+        const timeout: std.Io.Timeout = .{ .ns = @intCast(timeout_ns) };
+        var timed_out = false;
+        while (true) {
+            io.futexWaitTimeout(u32, &cond.epoch.raw, epoch, timeout) catch |err| switch (err) {
+                error.Canceled => {
+                    timed_out = true;
+                },
+                error.Timeout => {
+                    timed_out = true;
+                },
+            };
+
+            epoch = cond.epoch.load(.acquire);
+            // Try to consume a pending signal (mirrors stdlib waitInner).
+            {
+                var ps = cond.state.load(.monotonic);
+                while (ps.signals > 0) {
+                    ps = cond.state.cmpxchgWeak(ps, .{
+                        .waiters = ps.waiters - 1,
+                        .signals = ps.signals - 1,
+                    }, .acquire, .monotonic) orelse return false;
+                }
+            }
+            if (timed_out) {
+                _ = cond.state.fetchSub(.{ .waiters = 1, .signals = 0 }, .monotonic);
+                return true;
+            }
+        }
     }
 
     fn removeWaiter(self: *Memory, wq: *WaitQueue, idx: usize) void {
@@ -528,6 +553,10 @@ test "Memory — guarded mode read/write" {
 }
 
 test "Memory — atomicWait32 not-equal returns 1" {
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
     var m = Memory.init(testing.allocator, 1, null);
     defer m.deinit();
     m.is_shared_memory = true;
@@ -535,11 +564,15 @@ test "Memory — atomicWait32 not-equal returns 1" {
 
     try m.write(i32, 0, 0, 42);
     // Wait with expected=0, but actual is 42 → not-equal
-    const result = try m.atomicWait32(0, 0, -1);
+    const result = try m.atomicWait32(io, 0, 0, -1);
     try testing.expectEqual(@as(i32, 1), result);
 }
 
 test "Memory — atomicWait32 timeout returns 2" {
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
     var m = Memory.init(testing.allocator, 1, null);
     defer m.deinit();
     m.is_shared_memory = true;
@@ -547,28 +580,40 @@ test "Memory — atomicWait32 timeout returns 2" {
 
     try m.write(i32, 0, 0, 0);
     // Wait with expected=0 (matches), timeout=1ns → should time out quickly
-    const result = try m.atomicWait32(0, 0, 1);
+    const result = try m.atomicWait32(io, 0, 0, 1);
     try testing.expectEqual(@as(i32, 2), result);
 }
 
 test "Memory — atomicWait32 non-shared traps" {
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
     var m = Memory.init(testing.allocator, 1, null);
     defer m.deinit();
     try m.allocateInitial();
     // Non-shared memory → wait should trap
-    try testing.expectError(error.Trap, m.atomicWait32(0, 0, -1));
+    try testing.expectError(error.Trap, m.atomicWait32(io, 0, 0, -1));
 }
 
 test "Memory — atomicNotify returns 0 with no waiters" {
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
     var m = Memory.init(testing.allocator, 1, null);
     defer m.deinit();
     try m.allocateInitial();
     // Notify is valid on non-shared memory, returns 0
-    const result = try m.atomicNotify(0, 1);
+    const result = try m.atomicNotify(io, 0, 1);
     try testing.expectEqual(@as(i32, 0), result);
 }
 
 test "Memory — atomicWait32 + notify cross-thread" {
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
     var m = Memory.init(testing.allocator, 1, null);
     defer m.deinit();
     m.is_shared_memory = true;
@@ -577,16 +622,16 @@ test "Memory — atomicWait32 + notify cross-thread" {
 
     var wait_result: i32 = -1;
     const t = try std.Thread.spawn(.{}, struct {
-        fn run(mem_ptr: *Memory, result_ptr: *i32) void {
-            result_ptr.* = mem_ptr.atomicWait32(0, 0, -1) catch -1;
+        fn run(mem_ptr: *Memory, io_val: std.Io, result_ptr: *i32) void {
+            result_ptr.* = mem_ptr.atomicWait32(io_val, 0, 0, -1) catch -1;
         }
-    }.run, .{ &m, &wait_result });
+    }.run, .{ &m, io, &wait_result });
 
     // Give the waiter thread time to enter wait state
     std.Thread.sleep(10 * std.time.ns_per_ms);
 
     // Notify should wake the waiter
-    const woken = try m.atomicNotify(0, 1);
+    const woken = try m.atomicNotify(io, 0, 1);
     try testing.expectEqual(@as(i32, 1), woken);
 
     t.join();

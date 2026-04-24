@@ -2867,7 +2867,7 @@ pub const Vm = struct {
                 const effective_addr, const ov = @addWithOverflow(addr, offset);
                 if (ov != 0) return error.OutOfBoundsMemoryAccess;
                 if (effective_addr % 4 != 0) return error.Trap; // unaligned atomic
-                const result = m.atomicNotify(effective_addr, count) catch return error.OutOfBoundsMemoryAccess;
+                const result = m.atomicNotify(self.io, effective_addr, count) catch return error.OutOfBoundsMemoryAccess;
                 try self.pushI32(result);
             },
             .memory_atomic_wait32 => {
@@ -2877,7 +2877,7 @@ pub const Vm = struct {
                 const effective_addr, const ov = @addWithOverflow(addr, offset);
                 if (ov != 0) return error.OutOfBoundsMemoryAccess;
                 if (effective_addr % 4 != 0) return error.Trap; // unaligned atomic
-                const result = m.atomicWait32(effective_addr, expected, timeout) catch |err| switch (err) {
+                const result = m.atomicWait32(self.io, effective_addr, expected, timeout) catch |err| switch (err) {
                     error.Trap => return error.Trap,
                     else => return error.OutOfBoundsMemoryAccess,
                 };
@@ -2890,7 +2890,7 @@ pub const Vm = struct {
                 const effective_addr, const ov = @addWithOverflow(addr, offset);
                 if (ov != 0) return error.OutOfBoundsMemoryAccess;
                 if (effective_addr % 8 != 0) return error.Trap; // unaligned atomic
-                const result = m.atomicWait64(effective_addr, expected, timeout) catch |err| switch (err) {
+                const result = m.atomicWait64(self.io, effective_addr, expected, timeout) catch |err| switch (err) {
                     error.Trap => return error.Trap,
                     else => return error.OutOfBoundsMemoryAccess,
                 };
