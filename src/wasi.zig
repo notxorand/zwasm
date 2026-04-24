@@ -514,9 +514,9 @@ fn pathToZ(buf: *[std.posix.PATH_MAX]u8, path: []const u8) error{NameTooLong}![:
 /// inaccessible on Linux in Zig 0.16 (see `fstatatToFileStat` for the
 /// full-stat path). Returns null on error or unseekable fd.
 pub fn fdSize(fd: posix.fd_t) ?u64 {
-    const end = std.c.lseek(fd, 0, posix.SEEK.END);
+    const end = platform.pfdSeek(fd, 0, posix.SEEK.END);
     if (end < 0) return null;
-    _ = std.c.lseek(fd, 0, posix.SEEK.SET);
+    _ = platform.pfdSeek(fd, 0, posix.SEEK.SET);
     return @intCast(end);
 }
 
@@ -975,7 +975,7 @@ pub fn fd_read(ctx: *anyopaque, _: usize) anyerror!void {
         if (iov_ptr + iov_len > data.len) return error.OutOfBoundsMemoryAccess;
 
         const buf = data[iov_ptr .. iov_ptr + iov_len];
-        const rc = std.c.read(file.handle, buf.ptr, buf.len);
+        const rc = platform.pfdRead(file.handle, buf[0..buf.len]);
         if (rc < 0) {
             try pushErrno(vm, cErrnoToWasi());
             return;
@@ -1011,19 +1011,19 @@ pub fn fd_seek(ctx: *anyopaque, _: usize) anyerror!void {
         return;
     };
 
-    const whence_c: std.c.whence_t = switch (@as(Whence, @enumFromInt(whence_val))) {
+    const whence_c: c_int = switch (@as(Whence, @enumFromInt(whence_val))) {
         .SET => posix.SEEK.SET,
         .CUR => posix.SEEK.CUR,
         .END => posix.SEEK.END,
     };
-    const rc = std.c.lseek(file.handle, @intCast(offset), whence_c);
+    const rc = platform.pfdSeek(file.handle, @intCast(offset), whence_c);
     if (rc < 0) {
         try pushErrno(vm, cErrnoToWasi());
         return;
     }
 
     const memory = try vm.getMemory(0);
-    try memory.write(u64, newoffset_ptr, 0, @as(u64, @bitCast(@as(i64, rc))));
+    try memory.write(u64, newoffset_ptr, 0, @as(u64, @bitCast(rc)));
     try pushErrno(vm, .SUCCESS);
 }
 
@@ -1064,7 +1064,7 @@ pub fn fd_write(ctx: *anyopaque, _: usize) anyerror!void {
         if (wasi) |w| {
             if (w.getFdEntry(fd)) |entry| {
                 if (entry.append) {
-                    if (std.c.lseek(file.handle, 0, posix.SEEK.END) < 0) {
+                    if (platform.pfdSeek(file.handle, 0, posix.SEEK.END) < 0) {
                         try pushErrno(vm, cErrnoToWasi());
                         return;
                     }
@@ -1072,7 +1072,7 @@ pub fn fd_write(ctx: *anyopaque, _: usize) anyerror!void {
             }
         }
 
-        const wrc = std.c.write(file.handle, buf.ptr, buf.len);
+        const wrc = platform.pfdWrite(file.handle, buf);
         if (wrc < 0) {
             try pushErrno(vm, cErrnoToWasi());
             return;
@@ -1106,14 +1106,14 @@ pub fn fd_tell(ctx: *anyopaque, _: usize) anyerror!void {
         return;
     };
 
-    const cur_rc = std.c.lseek(file.handle, 0, posix.SEEK.CUR);
+    const cur_rc = platform.pfdSeek(file.handle, 0, posix.SEEK.CUR);
     if (cur_rc < 0) {
         try pushErrno(vm, cErrnoToWasi());
         return;
     }
 
     const memory = try vm.getMemory(0);
-    try memory.write(u64, offset_ptr, 0, @as(u64, @bitCast(@as(i64, cur_rc))));
+    try memory.write(u64, offset_ptr, 0, @as(u64, @bitCast(cur_rc)));
     try pushErrno(vm, .SUCCESS);
 }
 
@@ -1462,7 +1462,7 @@ pub fn path_open(ctx: *anyopaque, _: usize) anyerror!void {
                 .raw = ro_fd,
                 .kind = if (flags.DIRECTORY) .dir else .file,
             }, flags.APPEND) catch {
-                _ = std.c.close(ro_fd);
+                platform.pfdClose(ro_fd);
                 try pushErrno(vm, .NOMEM);
                 return;
             };
@@ -1480,7 +1480,7 @@ pub fn path_open(ctx: *anyopaque, _: usize) anyerror!void {
         .raw = host_fd,
         .kind = if (flags.DIRECTORY) .dir else .file,
     }, flags.APPEND) catch {
-        _ = std.c.close(host_fd);
+        platform.pfdClose(host_fd);
         try pushErrno(vm, .NOMEM);
         return;
     };
@@ -2127,7 +2127,7 @@ pub fn fd_pread(ctx: *anyopaque, _: usize) anyerror!void {
         if (iov_ptr + iov_len > data.len) return error.OutOfBoundsMemoryAccess;
 
         const buf = data[iov_ptr .. iov_ptr + iov_len];
-        const rc = std.c.pread(host_fd, buf.ptr, buf.len, @intCast(cur_offset));
+        const rc = platform.pfdPread(host_fd, buf, cur_offset);
         if (rc < 0) {
             try pushErrno(vm, cErrnoToWasi());
             return;
@@ -2209,7 +2209,7 @@ pub fn fd_pwrite(ctx: *anyopaque, _: usize) anyerror!void {
         if (iov_ptr + iov_len > data.len) return error.OutOfBoundsMemoryAccess;
 
         const buf = data[iov_ptr .. iov_ptr + iov_len];
-        const rc = std.c.pwrite(host_fd, buf.ptr, buf.len, @intCast(cur_offset));
+        const rc = platform.pfdPwrite(host_fd, buf, cur_offset);
         if (rc < 0) {
             try pushErrno(vm, cErrnoToWasi());
             return;
@@ -2327,7 +2327,7 @@ pub fn fd_renumber(ctx: *anyopaque, _: usize) anyerror!void {
                     .host = .{ .raw = undefined, .kind = .file }, // placeholder, never accessed
                     .is_open = false,
                 }) catch {
-                    _ = std.c.close(new_host);
+                    platform.pfdClose(new_host);
                     try pushErrno(vm, .NOMEM);
                     return;
                 };
@@ -2336,14 +2336,14 @@ pub fn fd_renumber(ctx: *anyopaque, _: usize) anyerror!void {
                 .host = .{ .raw = new_host, .kind = .file },
                 .append = append,
             }) catch {
-                _ = std.c.close(new_host);
+                platform.pfdClose(new_host);
                 try pushErrno(vm, .NOMEM);
                 return;
             };
         }
     } else {
         // Can't renumber to a preopened or stdio fd — just close new_host
-        _ = std.c.close(new_host);
+        platform.pfdClose(new_host);
         try pushErrno(vm, .BADF);
         return;
     }
