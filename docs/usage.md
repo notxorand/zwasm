@@ -143,7 +143,7 @@ In `build.zig.zon`:
 ```zig
 .dependencies = .{
     .zwasm = .{
-        .url = "https://github.com/clojurewasm/zwasm/archive/v1.6.1.tar.gz",
+        .url = "https://github.com/clojurewasm/zwasm/archive/v1.10.0.tar.gz",
         .hash = "...",  // zig build will report the correct hash
     },
 },

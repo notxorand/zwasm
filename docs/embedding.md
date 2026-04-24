@@ -9,7 +9,7 @@ zwasm is a Zig package. Add it to your `build.zig.zon`:
 ```zig
 .dependencies = .{
     .zwasm = .{
-        .url = "https://github.com/clojurewasm/zwasm/archive/v1.6.1.tar.gz",
+        .url = "https://github.com/clojurewasm/zwasm/archive/v1.10.0.tar.gz",
         .hash = "...",
     },
 },
@@ -22,8 +22,11 @@ const std = @import("std");
 const zwasm = @import("zwasm");
 
 pub fn main() !void {
-    const allocator = std.heap.page_allocator;
-    const wasm_bytes = try std.fs.cwd().readFileAlloc(allocator, "module.wasm", 10 * 1024 * 1024);
+    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const wasm_bytes = try readFile(allocator, "module.wasm");
     defer allocator.free(wasm_bytes);
 
     var module = try zwasm.WasmModule.load(allocator, wasm_bytes);
@@ -34,7 +37,21 @@ pub fn main() !void {
     try module.invoke("add", &args, &results);
     std.debug.print("result: {}\n", .{results[0]});
 }
+
+fn readFile(allocator: std.mem.Allocator, path: []const u8) ![]const u8 {
+    const file = try std.fs.cwd().openFile(path, .{});
+    defer file.close();
+    const stat = try file.stat();
+    const data = try allocator.alloc(u8, stat.size);
+    const n = try file.readAll(data);
+    return data[0..n];
+}
 ```
+
+> Zig 0.16 moved `readFileAlloc` onto `std.Io.Dir` and made it take an
+> `io: Io` argument + `Io.Limit`. The open+stat+readAll snippet above is
+> the simplest 0.16-compatible path; see `examples/zig/basic.zig` in the
+> repo for the exact form the CI builds.
 
 ### Allocator Ownership
 
