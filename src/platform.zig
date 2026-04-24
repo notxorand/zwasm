@@ -115,97 +115,146 @@ const FILE_END: windows.DWORD = 2;
 const ERROR_HANDLE_EOF: windows.DWORD = 38;
 const ERROR_BROKEN_PIPE: windows.DWORD = 109;
 
+// Linux direct-syscall helpers. Handles the `usize` return convention
+// (errno encoded as negative values cast to usize) and keeps `std.c._errno`
+// in sync so existing `cErrnoToWasi`-style callers keep working during the
+// un-link-libc migration (W46).
+fn linuxResultAsIsize(rc: usize) isize {
+    const e = std.os.linux.errno(rc);
+    if (e != .SUCCESS) {
+        // Mirror errno into libc's thread-local slot so that callers that
+        // read `std.c._errno()` see the failure. Direct Linux syscalls
+        // don't touch this slot on their own.
+        std.c._errno().* = @intFromEnum(e);
+        return -1;
+    }
+    return @bitCast(rc);
+}
+
+fn linuxResultAsI64(rc: usize) i64 {
+    const e = std.os.linux.errno(rc);
+    if (e != .SUCCESS) {
+        std.c._errno().* = @intFromEnum(e);
+        return -1;
+    }
+    return @as(i64, @bitCast(@as(u64, rc)));
+}
+
 /// POSIX-style write. Returns bytes written (>= 0) or -1 on error.
 pub fn pfdWrite(handle: std.posix.fd_t, buf: []const u8) isize {
-    if (builtin.os.tag == .windows) {
-        var written: windows.DWORD = 0;
-        const ok = WriteFile(handle, buf.ptr, @intCast(buf.len), &written, null);
-        if (ok == windows.BOOL.FALSE) return -1;
-        return @intCast(written);
+    switch (comptime builtin.os.tag) {
+        .windows => {
+            var written: windows.DWORD = 0;
+            const ok = WriteFile(handle, buf.ptr, @intCast(buf.len), &written, null);
+            if (ok == windows.BOOL.FALSE) return -1;
+            return @intCast(written);
+        },
+        .linux => return linuxResultAsIsize(std.os.linux.write(handle, buf.ptr, buf.len)),
+        else => return std.c.write(handle, buf.ptr, buf.len),
     }
-    return std.c.write(handle, buf.ptr, buf.len);
 }
 
 /// POSIX-style read. Returns bytes read (>= 0, 0 == EOF) or -1 on error.
 pub fn pfdRead(handle: std.posix.fd_t, buf: []u8) isize {
-    if (builtin.os.tag == .windows) {
-        var got: windows.DWORD = 0;
-        const ok = ReadFile(handle, buf.ptr, @intCast(buf.len), &got, null);
-        if (ok == windows.BOOL.FALSE) {
-            const err = GetLastError();
-            if (err == ERROR_BROKEN_PIPE or err == ERROR_HANDLE_EOF) return 0;
-            return -1;
-        }
-        return @intCast(got);
+    switch (comptime builtin.os.tag) {
+        .windows => {
+            var got: windows.DWORD = 0;
+            const ok = ReadFile(handle, buf.ptr, @intCast(buf.len), &got, null);
+            if (ok == windows.BOOL.FALSE) {
+                const err = GetLastError();
+                if (err == ERROR_BROKEN_PIPE or err == ERROR_HANDLE_EOF) return 0;
+                return -1;
+            }
+            return @intCast(got);
+        },
+        .linux => return linuxResultAsIsize(std.os.linux.read(handle, buf.ptr, buf.len)),
+        else => return std.c.read(handle, buf.ptr, buf.len),
     }
-    return std.c.read(handle, buf.ptr, buf.len);
 }
 
 /// POSIX-style positional read. Does not move the file offset.
 pub fn pfdPread(handle: std.posix.fd_t, buf: []u8, offset: u64) isize {
-    if (builtin.os.tag == .windows) {
-        var ov: Overlapped = .{
-            .Offset = @truncate(offset),
-            .OffsetHigh = @truncate(offset >> 32),
-        };
-        var got: windows.DWORD = 0;
-        const ok = ReadFile(handle, buf.ptr, @intCast(buf.len), &got, &ov);
-        if (ok == windows.BOOL.FALSE) {
-            const err = GetLastError();
-            if (err == ERROR_BROKEN_PIPE or err == ERROR_HANDLE_EOF) return 0;
-            return -1;
-        }
-        return @intCast(got);
+    switch (comptime builtin.os.tag) {
+        .windows => {
+            var ov: Overlapped = .{
+                .Offset = @truncate(offset),
+                .OffsetHigh = @truncate(offset >> 32),
+            };
+            var got: windows.DWORD = 0;
+            const ok = ReadFile(handle, buf.ptr, @intCast(buf.len), &got, &ov);
+            if (ok == windows.BOOL.FALSE) {
+                const err = GetLastError();
+                if (err == ERROR_BROKEN_PIPE or err == ERROR_HANDLE_EOF) return 0;
+                return -1;
+            }
+            return @intCast(got);
+        },
+        .linux => return linuxResultAsIsize(std.os.linux.pread(handle, buf.ptr, buf.len, @intCast(offset))),
+        else => return std.c.pread(handle, buf.ptr, buf.len, @intCast(offset)),
     }
-    return std.c.pread(handle, buf.ptr, buf.len, @intCast(offset));
 }
 
 /// POSIX-style positional write. Does not move the file offset.
 pub fn pfdPwrite(handle: std.posix.fd_t, buf: []const u8, offset: u64) isize {
-    if (builtin.os.tag == .windows) {
-        var ov: Overlapped = .{
-            .Offset = @truncate(offset),
-            .OffsetHigh = @truncate(offset >> 32),
-        };
-        var written: windows.DWORD = 0;
-        const ok = WriteFile(handle, buf.ptr, @intCast(buf.len), &written, &ov);
-        if (ok == windows.BOOL.FALSE) return -1;
-        return @intCast(written);
+    switch (comptime builtin.os.tag) {
+        .windows => {
+            var ov: Overlapped = .{
+                .Offset = @truncate(offset),
+                .OffsetHigh = @truncate(offset >> 32),
+            };
+            var written: windows.DWORD = 0;
+            const ok = WriteFile(handle, buf.ptr, @intCast(buf.len), &written, &ov);
+            if (ok == windows.BOOL.FALSE) return -1;
+            return @intCast(written);
+        },
+        .linux => return linuxResultAsIsize(std.os.linux.pwrite(handle, buf.ptr, buf.len, @intCast(offset))),
+        else => return std.c.pwrite(handle, buf.ptr, buf.len, @intCast(offset)),
     }
-    return std.c.pwrite(handle, buf.ptr, buf.len, @intCast(offset));
 }
 
 /// POSIX-style seek. `whence` uses `std.posix.SEEK.{SET,CUR,END}`.
 /// Returns the new offset or -1 on error.
 pub fn pfdSeek(handle: std.posix.fd_t, offset: i64, whence: c_int) i64 {
-    if (builtin.os.tag == .windows) {
-        const method: windows.DWORD = switch (whence) {
-            std.posix.SEEK.SET => FILE_BEGIN,
-            std.posix.SEEK.CUR => FILE_CURRENT,
-            std.posix.SEEK.END => FILE_END,
-            else => return -1,
-        };
-        var new_pos: windows.LARGE_INTEGER = 0;
-        const ok = SetFilePointerEx(handle, offset, &new_pos, method);
-        if (ok == windows.BOOL.FALSE) return -1;
-        return new_pos;
+    switch (comptime builtin.os.tag) {
+        .windows => {
+            const method: windows.DWORD = switch (whence) {
+                std.posix.SEEK.SET => FILE_BEGIN,
+                std.posix.SEEK.CUR => FILE_CURRENT,
+                std.posix.SEEK.END => FILE_END,
+                else => return -1,
+            };
+            var new_pos: windows.LARGE_INTEGER = 0;
+            const ok = SetFilePointerEx(handle, offset, &new_pos, method);
+            if (ok == windows.BOOL.FALSE) return -1;
+            return new_pos;
+        },
+        .linux => return linuxResultAsI64(std.os.linux.lseek(handle, offset, @intCast(whence))),
+        else => return std.c.lseek(handle, offset, whence),
     }
-    return std.c.lseek(handle, offset, whence);
 }
 
 pub fn pfdClose(handle: std.posix.fd_t) void {
-    if (builtin.os.tag == .windows) {
-        _ = CloseHandle(handle);
-        return;
+    switch (comptime builtin.os.tag) {
+        .windows => _ = CloseHandle(handle),
+        .linux => _ = std.os.linux.close(handle),
+        else => _ = std.c.close(handle),
     }
-    _ = std.c.close(handle);
 }
 
 pub fn pfdFsync(handle: std.posix.fd_t) i32 {
-    if (builtin.os.tag == .windows) {
-        return if (FlushFileBuffers(handle) == windows.BOOL.FALSE) -1 else 0;
+    switch (comptime builtin.os.tag) {
+        .windows => return if (FlushFileBuffers(handle) == windows.BOOL.FALSE) -1 else 0,
+        .linux => {
+            const rc = std.os.linux.fsync(handle);
+            const e = std.os.linux.errno(rc);
+            if (e != .SUCCESS) {
+                std.c._errno().* = @intFromEnum(e);
+                return -1;
+            }
+            return 0;
+        },
+        else => return std.c.fsync(handle),
     }
-    return std.c.fsync(handle);
 }
 
 pub fn reservePages(size: usize, prot: Protection) PageError![]align(page_size) u8 {
