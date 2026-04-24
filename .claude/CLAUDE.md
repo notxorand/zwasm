@@ -94,7 +94,9 @@ When in doubt, **continue**.
 6. **Benchmarks**: Required for optimization/JIT tasks.
    - Quick check: `bash bench/run_bench.sh --quick`
    - **Record**: `bash bench/record.sh --id=ID --reason="REASON"` (appends to history.yaml)
-7. **Size guard**: Binary ≤ 1.5MB (stripped), memory ≤ 4.5MB RSS
+7. **Size guard**: Binary ≤ 1.80 MB stripped (Linux ELF; Mac ~1.38 MB), memory ≤ 4.5 MB RSS.
+   Raised from 1.50 MB in v1.10.0 because Zig 0.16 requires `link_libc = true` for WASI.
+   Post-`std.Io` migration (planned) should let this return to 1.50 MB.
 8. **Minimal build** (when adding tests): `zig build test -Djit=false -Dcomponent=false -Dwat=false`
    Tests using WAT must guard with `if (!build_options.enable_wat) return error.SkipZigTest;`
    Tests using JIT must guard with `if (!build_options.enable_jit) return error.SkipZigTest;`
@@ -194,7 +196,7 @@ Benchmarks: `@./.claude/rules/bench-check.md` (auto-loads on bench/jit/vm edits)
 JIT: `@./.claude/rules/jit-check.md` (auto-loads on jit.zig edits).
 Development: `@./.claude/rules/reliability-work.md` (auto-loads on src/test/bench edits).
 Roadmap: `@./.dev/roadmap.md` (zwasm phases) + `@./private/future/03_zwasm_clojurewasm_roadmap_ja.md` (integrated).
-Allocator injection: `@./.dev/references/allocator-injection-plan.md` — Phase 11 design + task breakdown (D128).
+Allocator injection: `@./.dev/archive/allocator-injection-plan.md` — Phase 11 design + task breakdown (D128, completed in v1.5.0; archived).
 SIMD performance: `@./.dev/decisions.md` → D132 — two-phase SIMD optimization plan (W43 addr cache, W44 reg class).
 Ubuntu testing: `@./.dev/references/ubuntu-testing-guide.md` — OrbStack VM test commands.
 OrbStack setup: `@./.dev/references/setup-orbstack.md` — VM creation and tool installation.
