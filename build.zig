@@ -164,12 +164,18 @@ pub fn build(b: *std.Build) void {
     // Default to ReleaseSafe: Zig 0.15's Debug-mode shared libraries
     // crash on Linux x86_64 due to GPA/PIC codegen issues (see #11).
     // Users embedding zwasm want optimized code anyway.
+    //
+    // C API targets keep link_libc = true: `src/c_api.zig` uses
+    // `std.heap.c_allocator` as the default backing allocator, which
+    // requires libc on every platform (Mac libSystem auto-linked, Linux
+    // glibc/musl, Windows msvcrt). Consumers of libzwasm are C programs
+    // that always link libc anyway, so this costs them nothing.
     const lib_optimize = b.option(bool, "lib-debug", "Build libraries in Debug mode (default: false)") orelse false;
     const lib_shared_mod = b.createModule(.{
         .root_source_file = b.path("src/c_api.zig"),
         .target = target,
         .optimize = if (lib_optimize) optimize else if (optimize == .Debug) .ReleaseSafe else optimize,
-        .link_libc = false,
+        .link_libc = true,
     });
     lib_shared_mod.addOptions("build_options", options);
     const lib_shared = b.addLibrary(.{
@@ -184,7 +190,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/c_api.zig"),
         .target = target,
         .optimize = if (lib_optimize) optimize else if (optimize == .Debug) .ReleaseSafe else optimize,
-        .link_libc = false,
+        .link_libc = true,
         .pic = if (enable_pic) true else null,
     });
     lib_static_mod.addOptions("build_options", options);
@@ -220,7 +226,7 @@ pub fn build(b: *std.Build) void {
             .root_source_file = null,
             .target = target,
             .optimize = optimize,
-            .link_libc = false,
+            .link_libc = true,
         });
         ct_mod.addCSourceFile(.{ .file = b.path(ct.src) });
         ct_mod.addIncludePath(b.path("include"));
