@@ -110,6 +110,10 @@ const CApiConfig = struct {
     }
 
     /// Build a WasmModule.Config from this C API config.
+    /// The C ABI exposes `cancellable` as a plain bool, so we always forward a
+    /// concrete value. The C default (true) matches the Vm default, so the
+    /// resulting Config is a no-op override for callers who never touch the
+    /// setter.
     fn toModuleConfig(self: *CApiConfig) types.WasmModule.Config {
         return .{
             .fuel = self.fuel,

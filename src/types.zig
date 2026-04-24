@@ -252,7 +252,10 @@ pub const WasmModule = struct {
         timeout_ms: ?u64 = null,
         max_memory_bytes: ?u64 = null,
         force_interpreter: ?bool = null,
-        cancellable: bool = true,
+        /// Null keeps the Vm default (true — periodic cancellation checks enabled).
+        /// Set to `false` to skip the check for peak JIT throughput, at the cost
+        /// of making `WasmModule.cancel()` ineffective for JIT-compiled code.
+        cancellable: ?bool = null,
     };
 
     /// Load a Wasm module from binary bytes with explicit configuration.
@@ -475,11 +478,11 @@ pub const WasmModule = struct {
         self.force_interpreter = config.force_interpreter;
         self.timeout_ms = config.timeout_ms;
         self.fuel = config.fuel;
-        
+
         if (self.fuel) |f| self.vm.fuel = f;
         if (self.max_memory_bytes) |mb| self.vm.max_memory_bytes = mb;
         if (self.force_interpreter) |fi| self.vm.force_interpreter = fi;
-        self.vm.cancellable = config.cancellable;
+        if (config.cancellable) |c| self.vm.cancellable = c;
         if (self.timeout_ms) |ms| self.vm.setDeadlineTimeoutMs(ms);
 
         // Execute start function if present.
