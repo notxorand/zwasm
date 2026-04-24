@@ -555,10 +555,13 @@ pub const WasmModule = struct {
     }
 
     /// Request cancellation of the currently executing Wasm function.
-    /// Can be called from another thread while invoke() is in progress.
-    /// The execution will be stopped at the next instruction checkpoint (approximately every 1024 instructions),
-    /// and invoke() will return error.Canceled.
-    /// Thread-safe. Has no effect if no function is currently executing.
+    /// Can be called from another thread while `invoke()` is in progress.
+    /// Execution stops at the next checkpoint (~every 1024 instructions or at
+    /// the JIT fuel interval) and `invoke()` returns `error.Canceled`.
+    ///
+    /// Thread-safe. The cancel flag is cleared by `vm.reset()` at the start of
+    /// every `invoke()`, so requests issued while the module is idle are
+    /// dropped — the host must race the cancel against a live invocation.
     pub fn cancel(self: *WasmModule) void {
         self.vm.cancel();
     }
