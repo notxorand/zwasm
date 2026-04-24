@@ -10236,6 +10236,21 @@ test "armJitFuel — cancellable = false prevents capping" {
     try testing.expectEqual(@as(i64, std.math.maxInt(i64)), vm.jit_fuel);
 }
 
+// Small cross-platform ~1ms sleep used by the cancellation tests below.
+// `std.posix.timespec` is `void` on Windows, so the nanosleep-based path
+// cannot even be *constructed* on Windows — branch at comptime.
+fn sleepOneMillisecondForCancelTest() void {
+    if (builtin.os.tag == .windows) {
+        const K32 = struct {
+            extern "kernel32" fn Sleep(dwMilliseconds: u32) callconv(.winapi) void;
+        };
+        K32.Sleep(1);
+    } else {
+        const req: std.posix.timespec = .{ .sec = 0, .nsec = 1 * std.time.ns_per_ms };
+        _ = std.c.nanosleep(&req, null);
+    }
+}
+
 test "Cancellation — cancel flag stops interpreter loop" {
     // A background thread calls cancel() while invoke() is running.
     // consumeInstructionBudget() detects the flag at the next checkpoint
@@ -10256,8 +10271,7 @@ test "Cancellation — cancel flag stops interpreter loop" {
 
     const cancel_thread = try std.Thread.spawn(.{}, struct {
         fn run(v: *Vm) void {
-            const req: std.posix.timespec = .{ .sec = 0, .nsec = 1 * std.time.ns_per_ms };
-            _ = std.c.nanosleep(&req, null); // let invoke() start
+            sleepOneMillisecondForCancelTest(); // let invoke() start
             v.cancel();
         }
     }.run, .{&vm});
@@ -10321,8 +10335,7 @@ test "Cancellation — cancel flag stops JIT loop" {
 
     const cancel_thread = try std.Thread.spawn(.{}, struct {
         fn run(v: *Vm) void {
-            const req: std.posix.timespec = .{ .sec = 0, .nsec = 1 * std.time.ns_per_ms };
-            _ = std.c.nanosleep(&req, null); // let invoke() start
+            sleepOneMillisecondForCancelTest(); // let invoke() start
             v.cancel();
         }
     }.run, .{&vm});
