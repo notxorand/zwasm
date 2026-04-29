@@ -235,6 +235,7 @@ Crash files auto-saved to `test/fuzz/corpus/crash_*`.
 
 ## References
 
+v2 charter (read before any v2 work): `@./.dev/zwasm-v2-charter.md` — motivation / CW v2 precedent / discussion seeds / investigation-first start procedure. v1 (this repo's `main`) stays untouched; v2 work, if it starts, lives on a separate branch or worktree.
 Zig tips: `@./.claude/references/zig-tips.md` — check before writing Zig code.
 Benchmarks: `@./.claude/rules/bench-check.md` (auto-loads on bench/jit/vm edits).
 JIT: `@./.claude/rules/jit-check.md` (auto-loads on jit.zig edits).

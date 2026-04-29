@@ -23,6 +23,19 @@ Session handover document. Read at session start.
 
 ## Current Task
 
+> **NEXT SESSION: read `@./.dev/zwasm-v2-charter.md` first.**
+>
+> The user has decided to consider a parallel v2 ground-up rewrite
+> on the model of `~/Documents/MyProducts/ClojureWasmFromScratch/`,
+> motivated by structural cleanliness, lower long-term Wasm-evolution
+> cost, wasm-c-api FFI standardisation, and knowledge compression.
+> The charter captures the four motivations, the CW v2 precedent,
+> discussion seeds (not mandates), hard constraints, and an explicit
+> investigation-first start procedure (read → investigate → charter
+> a v2 ROADMAP → decide). **No v2 code commits until the
+> investigation phase produces a ROADMAP draft.** v1 (this repo's
+> `main`) stays untouched for the foreseeable future.
+
 **W54 substrate landed via PR #91 from `develop/w54-loop-info`** (2026-04-30).
 Single structural change: `src/loop_info.zig` is the single source of
 truth for branch / loop / vreg liveness. Both backends drop ~60 lines
