@@ -188,7 +188,6 @@ incompatibility — every one is a script-side limitation:
 
 | Step                                    | Blocker                                                 | Fix shape                                                  |
 |-----------------------------------------|---------------------------------------------------------|------------------------------------------------------------|
-| `test/c_api/run_ffi_test.sh`            | `gcc -ldl -pthread`, `dlfcn.h` in `test_ffi.c`          | Branch for `LoadLibraryA` + `GetProcAddress` (~50 lines C) |
 | `benchmark` job                         | `hyperfine` install via DEB; `bench/ci_compare.sh` GNU dependencies | Add Windows install step + audit ci_compare.sh portability |
 
 (Memory check is no longer in this table — PR #64 added a PowerShell
@@ -203,7 +202,10 @@ cargo run` is no longer in this table — `build.rs` now has a Windows
 arm that copies `zwasm.dll` next to the cargo target binary for
 runtime discovery. Binary size check + size-matrix are no longer in
 this table — `build.zig` exposes `-Dstrip=true` which strips the CLI
-binary at link time via LLD, portable across ELF / Mach-O / PE.)
+binary at link time via LLD, portable across ELF / Mach-O / PE.
+`Run FFI tests` is no longer in this table — `test_ffi.c` gained
+`#ifdef _WIN32` branches for LoadLibraryA / CreateThread / `_pipe`,
+and the runner switched to `zig cc`.)
 
 ## Nix devshell contents (current)
 

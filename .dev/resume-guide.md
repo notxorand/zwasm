@@ -99,10 +99,9 @@ the full table; ordered here by safety / value.
 
 | Id  | Guard                                       | Work                                                                                          | Risk   |
 |-----|---------------------------------------------|-----------------------------------------------------------------------------------------------|--------|
-| C-b | `test/c_api/run_ffi_test.sh`                | Port `test/c_api/test_ffi.c` to use `LoadLibraryA` + `GetProcAddress` on Windows; `.dll` path branch in the shell script. ~50 lines C + 10 lines shell. | High   |
 | C-g | `benchmark` Ubuntu-only                     | hyperfine Windows zip install + `bench/ci_compare.sh` GNU dependency audit (`/usr/bin/time`, `awk`, `comm`). Likely invasive. | High   |
 
-Suggested order: **C-b → C-g**. (C-a landed post-2026-04-29 —
+Suggested order: **C-g**. (C-a landed post-2026-04-29 —
 `zig build shared-lib` on Windows produces `zwasm.dll` + `zwasm.lib`
 natively from `addLibrary({.linkage = .dynamic})`; guard was a no-op.
 C-d landed post-2026-04-29 — `test/c_api/run_static_link_test.sh`
@@ -111,7 +110,10 @@ post-2026-04-29 — `examples/rust/build.rs` gained a Windows arm
 that copies `zwasm.dll` next to the cargo target binary at runtime,
 and uses `zwasm.lib` for static linking without `-lc/-lm`. C-e + C-f
 landed post-2026-04-29 — `build.zig` exposes `-Dstrip=true` and
-the size-matrix is now a 3-OS matrix (Ubuntu / macOS / Windows).)
+the size-matrix is now a 3-OS matrix (Ubuntu / macOS / Windows).
+C-b landed post-2026-04-29 — `test_ffi.c` ported via `#ifdef _WIN32`
+blocks to `LoadLibraryA` + `CreateThread` + `_pipe`; runner uses
+`zig cc`.)
 
 After each removal: check `gate-commit.sh` no longer needs the
 matching auto-skip in `scripts/gate-commit.sh:case "$HOST_KIND"`.
