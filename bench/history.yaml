@@ -5743,3 +5743,68 @@ entries:
       rw_cpp_string_cached: {time_ms: 5.1}
       rw_cpp_sort: {time_ms: 3.2}
       rw_cpp_sort_cached: {time_ms: 3.7}
+  - id: "7590b4a"
+    date: "2026-04-29"
+    reason: "ci(c-g step 5): flip benchmark job to a 3-OS matrix (#88)"
+    commit: "4af67fc"
+    arch: x86_64-linux
+    build: ReleaseSafe
+    results:
+      fib: {time_ms: 130.2}
+      fib_cached: {time_ms: 134.0}
+      tak: {time_ms: 27.0}
+      tak_cached: {time_ms: 27.7}
+      sieve: {time_ms: 19.5}
+      sieve_cached: {time_ms: 19.3}
+      nbody: {time_ms: 74.9}
+      nbody_cached: {time_ms: 75.2}
+      nqueens: {time_ms: 17.1}
+      nqueens_cached: {time_ms: 16.8}
+      tgo_fib: {time_ms: 79.3}
+      tgo_fib_cached: {time_ms: 81.9}
+      tgo_tak: {time_ms: 27.1}
+      tgo_tak_cached: {time_ms: 27.7}
+      tgo_arith: {time_ms: 14.1}
+      tgo_arith_cached: {time_ms: 14.6}
+      tgo_sieve: {time_ms: 21.4}
+      tgo_sieve_cached: {time_ms: 21.5}
+      tgo_fib_loop: {time_ms: 13.9}
+      tgo_fib_loop_cached: {time_ms: 15.0}
+      tgo_gcd: {time_ms: 13.1}
+      tgo_gcd_cached: {time_ms: 15.4}
+      tgo_nqueens: {time_ms: 110.5}
+      tgo_nqueens_cached: {time_ms: 111.3}
+      tgo_mfr: {time_ms: 202.5}
+      tgo_mfr_cached: {time_ms: 204.4}
+      tgo_list: {time_ms: 188.5}
+      tgo_list_cached: {time_ms: 192.5}
+      tgo_rwork: {time_ms: 29.3}
+      tgo_rwork_cached: {time_ms: 30.8}
+      tgo_strops: {time_ms: 90.8}
+      tgo_strops_cached: {time_ms: 93.7}
+      st_fib2: {time_ms: 1715.3}
+      st_fib2_cached: {time_ms: 1731.2}
+      st_sieve: {time_ms: 335.3}
+      st_sieve_cached: {time_ms: 337.9}
+      st_nestedloop: {time_ms: 20.1}
+      st_nestedloop_cached: {time_ms: 20.3}
+      st_ackermann: {time_ms: 24.4}
+      st_ackermann_cached: {time_ms: 24.5}
+      st_matrix: {time_ms: 361.7}
+      st_matrix_cached: {time_ms: 364.9}
+      gc_alloc: {time_ms: 21.5}
+      gc_alloc_cached: {time_ms: 22.8}
+      gc_tree: {time_ms: 128.3}
+      gc_tree_cached: {time_ms: 131.2}
+      rw_rust_fib: {time_ms: 78.9}
+      rw_rust_fib_cached: {time_ms: 79.4}
+      rw_c_matrix: {time_ms: 26.4}
+      rw_c_matrix_cached: {time_ms: 26.0}
+      rw_c_math: {time_ms: 55.7}
+      rw_c_math_cached: {time_ms: 55.8}
+      rw_c_string: {time_ms: 118.7}
+      rw_c_string_cached: {time_ms: 122.4}
+      rw_cpp_string: {time_ms: 30.9}
+      rw_cpp_string_cached: {time_ms: 34.1}
+      rw_cpp_sort: {time_ms: 27.4}
+      rw_cpp_sort_cached: {time_ms: 28.0}
